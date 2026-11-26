@@ -21,3 +21,5 @@ ndb-buffer = { path = "../ndb-buffer" }
 ndb-analyzer = { path = "../ndb-analyzer" }
 ndb-wal = { path = "../ndb-wal" }
 tempfile = { workspace = true }
+ndb-hnsw = { path = "../ndb-hnsw" }
+ndb-vector = { path = "../ndb-vector" }

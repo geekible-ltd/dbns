@@ -97,6 +97,22 @@ pub enum Expr {
         terms: String,
         slop: u32,
     },
+    /// Vector k-NN search on an HNSW index (§12.7): drives the access
+    /// path when present — `vector` is the raw query embedding.
+    VectorSearch {
+        index: String,
+        field: String,
+        vector: Vec<f32>,
+        k: usize,
+        ef: usize,
+    },
+    /// Vector similarity predicate on a document field (§12.7) — residual
+    /// filter: cosine score >= `min_score`.
+    VectorFilter {
+        field: String,
+        vector: Vec<f32>,
+        min_score: f32,
+    },
     /// Fuzzy match with edit distance + expansion caps (§12.6).
     Fuzzy {
         index: String,

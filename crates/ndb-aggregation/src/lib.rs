@@ -354,6 +354,15 @@ impl QueryEngine {
                     fields: d.fields.iter().map(|f| f.field.clone()).collect(),
                 })
                 .collect(),
+            vector_indexes: coll
+                .meta()
+                .vector_indexes
+                .iter()
+                .map(|d| ndb_query_planner::VectorIndexView {
+                    name: d.name.clone(),
+                    field: d.field.clone(),
+                })
+                .collect(),
         }
     }
 

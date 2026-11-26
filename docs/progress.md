@@ -131,11 +131,27 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       $unwind/$addFields + $sum/$avg/$min/$max/$first/$last/$concat/
       $toString/$ifNull; bounded-memory $group with B+Tree spill
       (`ndb-aggregation` + `QueryEngine` facade)
-- [~] Cursor-based deep pagination, external merge sort, vector ops
-      (Phase 7)
+- [~] Cursor-based deep pagination, external merge sort
+      (deferred — beyond Phase 7)
 
-### Phases 7–11 (not started)
-- [ ] Phase 7 — vector + hybrid: vector storage, HNSW, RRF (spec §10–11)
+### Phase 7 — vector + hybrid search (complete)
+- [x] Vector primitives: cosine/dot/euclidean, `EncodedVector` codec —
+      f32 reference + f16/int8 quantisation groundwork (`ndb-vector`)
+- [x] HNSW in the index B+Tree: level selection, ef_construction beam,
+      diversity-heuristic neighbour select + reciprocal pruning, greedy +
+      ef search, tombstone deletes w/ entry-point reselection
+      (`ndb-hnsw`; recall@10 = 1.0 @ 400 docs in tests)
+- [x] RRF fusion (configurable k + leg weights), compact candidates,
+      provenance; `search_hybrid` = §11.3 pipeline — early candidate
+      filter, late materialization (`ndb-hybrid` + `Collection`)
+- [x] Vector index admin: create/backfill/drop, synchronous
+      insert/update/delete maintenance, restart persistence
+- [x] Query integration: `$vectorSearch` → VectorSearch access path,
+      `$vectorFilter` residual predicate (cosine threshold)
+- [~] Physical edge unlinking + graph compaction (tombstones accumulate),
+      predicate push-down into the graph walk, packed-slab vector layout
+
+### Phases 8–11 (not started)
 - [ ] Phase 8 — REST + gRPC + Rust SDK + management web UI (spec §15–16;
       UI: React/TypeScript SPA in `ui/`, separate frontend app, consumes the
       public REST API incl. §15.7 admin endpoints; RBAC integration per §15.8)
@@ -152,4 +168,7 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 - [x] ADR-003 Binary document format
 - [x] ADR-004 Page-oriented storage
 - [x] ADR-005 B+Tree primary storage
-- [ ] ADR-006 through ADR-020 — write when each subsystem's design is finalised
+- [x] ADR-006 WAL design, ADR-007 MVCC isolation, ADR-011 inverted index,
+      ADR-012 BM25 ranking, ADR-013 HNSW vector search, ADR-014 hybrid RRF,
+      ADR-015 query language, ADR-021 catalog/index layout
+- [ ] Remaining ADRs (008–010, 016–020) — write as each subsystem lands

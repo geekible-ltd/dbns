@@ -33,6 +33,15 @@ pub struct PlanStats {
     pub doc_count: u64,
     pub indexes: Vec<IndexView>,
     pub text_indexes: Vec<TextIndexView>,
+    /// HNSW indexes — `VectorIndexView { name, field }` (§10.2).
+    pub vector_indexes: Vec<VectorIndexView>,
+}
+
+/// Slim view of a vector index for plan resolution.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VectorIndexView {
+    pub name: String,
+    pub field: String,
 }
 
 /// How the executor reaches candidate documents.
@@ -51,6 +60,14 @@ pub enum AccessPath {
     FullScan,
     /// Full-text search → scored doc ids.
     TextSearch { index: String, kind: TextKind },
+    /// HNSW k-NN search → scored doc ids (§12.7).
+    VectorSearch {
+        index: String,
+        field: String,
+        vector: Vec<f32>,
+        k: usize,
+        ef: usize,
+    },
 }
 
 /// Text-query flavours routed to collection search APIs (§12.6).
@@ -342,6 +359,42 @@ pub fn text_candidate(filter: &Expr, stats: &PlanStats) -> Option<(TextKind, Str
         if stats.text_indexes.iter().any(|t| t.name == name) {
             return Some((kind, name, i));
         }
+    }
+    None
+}
+
+/// A `$vectorSearch` clause → a VectorSearch access candidate (§12.7).
+/// Same resolve rule as text: explicit index name else first vector index;
+/// `field` defaults to the index's own field when omitted.
+pub fn vector_candidate(
+    filter: &Expr,
+    stats: &PlanStats,
+) -> Option<(usize, String, String, Vec<f32>, usize, usize)> {
+    for (i, c) in conjuncts(filter).iter().enumerate() {
+        let Expr::VectorSearch {
+            index,
+            field,
+            vector,
+            k,
+            ef,
+        } = c
+        else {
+            continue;
+        };
+        let name = if !index.is_empty() {
+            index.clone()
+        } else {
+            stats.vector_indexes.first().map(|v| v.name.clone())?
+        };
+        let Some(def) = stats.vector_indexes.iter().find(|v| v.name == name) else {
+            continue;
+        };
+        let field_name = if !field.is_empty() {
+            field.clone()
+        } else {
+            def.field.clone()
+        };
+        return Some((i, name, field_name, vector.clone(), *k, *ef));
     }
     None
 }

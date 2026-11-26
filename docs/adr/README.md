@@ -23,8 +23,8 @@ The spec (§28) pre-allocates this list — add new ADRs beyond ADR-020 as neede
 | ADR-010 | Three replicas per shard | proposed |
 | ADR-011 | Inverted index design | accepted |
 | ADR-012 | BM25 ranking | accepted |
-| ADR-013 | HNSW vector search | proposed |
-| ADR-014 | Hybrid search using RRF | proposed |
+| ADR-013 | HNSW vector search | accepted |
+| ADR-014 | Hybrid search using RRF | accepted |
 | ADR-015 | MongoDB-inspired query language | accepted |
 | ADR-016 | Near-real-time search visibility | proposed |
 | ADR-017 | REST and gRPC interfaces | proposed |

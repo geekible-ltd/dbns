@@ -10,6 +10,7 @@ ndb-btree = { path = "../ndb-btree" }
 ndb-page = { path = "../ndb-page" }
 ndb-transaction = { path = "../ndb-transaction" }
 ndb-index = { path = "../ndb-index" }
+ndb-vector = { path = "../ndb-vector" }
 ndb-query-ast = { path = "../ndb-query-ast" }
 ndb-query-planner = { path = "../ndb-query-planner" }
 ndb-buffer = { path = "../ndb-buffer" }

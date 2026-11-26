@@ -456,3 +456,125 @@ fn text_query_drives_access_path() {
     assert_eq!(r.docs.len(), 2);
     assert!(r.scores.is_some()); // BM25 scores flow through
 }
+
+#[test]
+fn vector_search_drives_access_path() {
+    let db = create_db();
+    let mut txn = db.engine.txns().begin_write().unwrap();
+    db.engine.create_database(&mut txn, "app").unwrap();
+    db.engine
+        .create_collection(&mut txn, "app", "docs", Schema::new())
+        .unwrap();
+    let mut coll = db.engine.collection(&txn, "app", "docs").unwrap().unwrap();
+    coll.create_vector_index(
+        &mut txn,
+        "v_emb",
+        "emb",
+        ndb_hnsw::HnswConfig {
+            dims: 4,
+            metric: ndb_vector::Metric::Cosine,
+            m: 8,
+            ef_construction: 40,
+            ef_search: 16,
+        },
+    )
+    .unwrap();
+    for (i, v) in [
+        vec![1.0, 0.0, 0.0, 0.0],
+        vec![0.0, 1.0, 0.0, 0.0],
+        vec![0.9, 0.1, 0.0, 0.0],
+        vec![0.0, 0.0, 0.0, 1.0],
+    ]
+    .iter()
+    .enumerate()
+    {
+        coll.insert(
+            &mut txn,
+            doc(&[
+                ("name", s(&format!("d{i}"))),
+                ("emb", Value::Vector(v.clone())),
+            ]),
+        )
+        .unwrap();
+    }
+    txn.commit().unwrap();
+
+    let mut txn = db.engine.txns().begin_write().unwrap();
+    // $vectorSearch → VectorSearch access path.
+    let plan = db
+        .qe
+        .explain(
+            &db.engine,
+            &mut txn,
+            r#"{
+        "collection":"docs","database":"app",
+        "filter":{"$vectorSearch":{"index":"v_emb","vector":[1.0,0.0,0.0,0.0],"k":2}}
+    }"#,
+        )
+        .unwrap();
+    assert!(matches!(plan.access, AccessPath::VectorSearch { .. }));
+
+    let r = db
+        .qe
+        .find(
+            &db.engine,
+            &mut txn,
+            r#"{
+        "collection":"docs","database":"app",
+        "filter":{"$vectorSearch":{"index":"v_emb","vector":[1.0,0.0,0.0,0.0],"k":2}}
+    }"#,
+            &ExecLimits::default(),
+        )
+        .unwrap();
+    txn.commit().unwrap();
+    assert_eq!(r.docs.len(), 2);
+    let names: Vec<&str> = r
+        .docs
+        .iter()
+        .filter_map(|d| match d.get("name") {
+            Some(Value::String(n)) => Some(n.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(names.contains(&"d0") && names.contains(&"d2")); // the two x-axis vectors
+}
+
+#[test]
+fn vector_filter_residual_predicate() {
+    let db = create_db();
+    let mut txn = db.engine.txns().begin_write().unwrap();
+    db.engine.create_database(&mut txn, "app").unwrap();
+    db.engine
+        .create_collection(&mut txn, "app", "docs", Schema::new())
+        .unwrap();
+    let mut coll = db.engine.collection(&txn, "app", "docs").unwrap().unwrap();
+    for (name, v) in [
+        ("x", vec![1.0, 0.0]),
+        ("y", vec![0.9, 0.1]),
+        ("z", vec![0.0, 1.0]),
+    ] {
+        coll.insert(
+            &mut txn,
+            doc(&[("name", s(name)), ("emb", Value::Vector(v))]),
+        )
+        .unwrap();
+    }
+    txn.commit().unwrap();
+
+    // $vectorFilter as a residual predicate — no index needed.
+    let r = find(
+        &db,
+        r#"{
+        "collection":"docs","database":"app",
+        "filter":{"emb":{"$vectorFilter":{"vector":[1.0,0.0],"minScore":0.95}}}
+    }"#,
+    );
+    let names: Vec<String> = r
+        .iter()
+        .filter_map(|d| match d.get("name") {
+            Some(Value::String(n)) => Some(n.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names, vec!["x", "y"]);
+}

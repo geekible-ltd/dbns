@@ -1,0 +1,7 @@
+[package]
+name = "ndb-hybrid"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ndb-common = { path = "../ndb-common" }

@@ -48,6 +48,10 @@ impl Optimizer {
                     }
                     Expr::Array { field, op, .. } => out.push(format!("a{field}{op:?}")),
                     Expr::Exists { field, .. } => out.push(format!("x{field}")),
+                    Expr::VectorSearch { index, field, .. } => {
+                        out.push(format!("vs{index}{field}"))
+                    }
+                    Expr::VectorFilter { field, .. } => out.push(format!("vf{field}")),
                     Expr::Type { field, .. } => out.push(format!("t{field}")),
                     Expr::Text { .. } => out.push("txt".into()),
                     Expr::Phrase { field, .. } => out.push(format!("ph{field}")),
@@ -112,6 +116,28 @@ impl Optimizer {
                 return Ok(p);
             }
 
+            // 2b) vector access — a $vectorSearch clause drives the k-NN
+            // index (§12.7). Post-text precedence: hybrid fusion belongs to
+            // collection.search_hybrid, not the linear planner.
+            if let Some((ci, index, field, vector, k, ef)) = vector_candidate(filter, stats) {
+                explain.push(format!("access: vector index '{index}' (hnsw k={k})"));
+                let mut p = assemble(
+                    q,
+                    AccessPath::VectorSearch {
+                        index,
+                        field,
+                        vector,
+                        k,
+                        ef,
+                    },
+                    &[ci],
+                    k.max(1) as u64,
+                    explain,
+                );
+                self.order_residual(&mut p);
+                return Ok(p);
+            }
+
             // 3) secondary index ranges — pick minimum estimated scan.
             let cands = index_candidates(filter, stats)?;
             if let Some(best) = cands.iter().min_by(|a, b| {
@@ -159,6 +185,7 @@ impl Optimizer {
                 Expr::Not { .. } => 2,
                 Expr::Array { .. } => 3,
                 Expr::Text { .. } | Expr::Phrase { .. } | Expr::Fuzzy { .. } => 4,
+                Expr::VectorFilter { .. } | Expr::VectorSearch { .. } => 4,
                 Expr::Logical { .. } => 5,
             }
         }

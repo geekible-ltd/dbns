@@ -16,6 +16,9 @@ ndb-analyzer = { path = "../ndb-analyzer" }
 ndb-inverted = { path = "../ndb-inverted" }
 ndb-bm25 = { path = "../ndb-bm25" }
 ndb-fuzzy = { path = "../ndb-fuzzy" }
+ndb-vector = { path = "../ndb-vector" }
+ndb-hnsw = { path = "../ndb-hnsw" }
+ndb-hybrid = { path = "../ndb-hybrid" }
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -10,7 +10,7 @@
 
 use crate::docstore::DocStore;
 use crate::index;
-use crate::meta::{CollectionMeta, IndexDef, TextFieldDef, TextIndexDef};
+use crate::meta::{CollectionMeta, IndexDef, TextFieldDef, TextIndexDef, VectorIndexDef};
 use ndb_analyzer::{Analyzer, AnalyzerConfig};
 use ndb_bm25::{Bm25, WeightedScorer};
 use ndb_btree::BTree;
@@ -18,6 +18,8 @@ use ndb_btree::key::{KeyPart, encode_composite};
 use ndb_common::error::Error;
 use ndb_common::ids::DocumentId;
 use ndb_document::{Document, EncodeOptions, Schema, codec};
+use ndb_hnsw::{HnswConfig, HnswIndex};
+use ndb_hybrid::{Candidate, Leg, fuse as fuseHybrid};
 use ndb_inverted::query::{Hit, TextQuery};
 use ndb_inverted::{FieldText, InvertedIndex};
 use ndb_page::manager::PageIo;
@@ -38,6 +40,8 @@ pub struct Collection<P: PageIo> {
     index_trees: Vec<Arc<BTree<P>>>,
     /// Full-text index trees, parallel to `meta.text_indexes` (§9.1).
     text_trees: Vec<Arc<BTree<P>>>,
+    /// HNSW index trees, parallel to `meta.vector_indexes` (§10.1).
+    vector_trees: Vec<Arc<BTree<P>>>,
     docstore: DocStore<P>,
     /// The system catalog tree + this collection's key in it.
     catalog: Arc<BTree<P>>,
@@ -67,12 +71,17 @@ impl<P: PageIo> Collection<P> {
         for def in &meta.text_indexes {
             text_trees.push(Arc::new(BTree::open(Arc::clone(pool), def.root)?));
         }
+        let mut vector_trees = Vec::with_capacity(meta.vector_indexes.len());
+        for def in meta.vector_indexes.iter() {
+            vector_trees.push(Arc::new(BTree::open(Arc::clone(pool), def.root)?));
+        }
         let id_cursor = meta.next_doc_id;
         Ok(Self {
             meta,
             pk,
             index_trees,
             text_trees,
+            vector_trees,
             docstore: DocStore::new(Arc::clone(pool)),
             catalog: Arc::clone(catalog),
             catalog_key,
@@ -177,6 +186,7 @@ impl<P: PageIo> Collection<P> {
         let entry = self.docstore.write(&bytes)?;
         self.write_index_entries(txn, doc)?;
         self.index_text_fields(txn, doc)?;
+        self.index_vector_fields(txn, doc)?;
         txn.insert_in(&self.pk, &Self::pk_key(doc.id), &entry)?;
         self.auto_save(txn)
     }
@@ -233,6 +243,7 @@ impl<P: PageIo> Collection<P> {
         };
         self.remove_index_entries(txn, &old)?;
         self.remove_text_entries(txn, &old)?;
+        self.remove_vector_entries(txn, &old)?;
         txn.delete_in(&self.pk, &Self::pk_key(id))
     }
 
@@ -911,5 +922,263 @@ impl<P: PageIo> Collection<P> {
             )?;
         }
         Ok(())
+    }
+}
+
+/// Extracts the `Value::Vector` for an index field — dotted paths traverse
+/// nested objects the same way the executor resolves them (§10.1).
+fn vector_field_value<'v>(doc: &'v Document, field: &str) -> Option<&'v Vec<f32>> {
+    let mut cur: Option<&ndb_document::Value> = doc.fields.get(field);
+    if cur.is_none() && field.contains('.') {
+        let mut parts = field.split('.');
+        let first = parts.next().unwrap_or(field);
+        let mut node = doc.fields.get(first);
+        for part in parts {
+            match node {
+                Some(ndb_document::Value::Object(map)) => node = map.get(part),
+                _ => {
+                    node = None;
+                    break;
+                }
+            }
+        }
+        cur = node;
+    }
+    match cur {
+        Some(ndb_document::Value::Vector(v)) => Some(v),
+        _ => None,
+    }
+}
+
+/// One row returned by `search_vector`/`search_hybrid`.
+pub struct VectorHit {
+    pub doc_id: DocumentId,
+    pub doc: Document,
+    /// Metric-aligned score — higher is nearer (cosine/dot positive,
+    /// euclidean = -distance).
+    pub score: f64,
+    /// Legs that contributed this hit (`Leg::Vector` for pure vector search).
+    pub legs: Vec<String>,
+}
+
+impl<P: PageIo> Collection<P> {
+    fn vector_pos(&self, name: &str) -> ndb_common::Result<usize> {
+        self.meta
+            .vector_indexes
+            .iter()
+            .position(|d| d.name == name)
+            .ok_or_else(|| Error::NotFound(format!("vector index '{name}' not found")))
+    }
+
+    fn vector_pair(&self, name: &str) -> ndb_common::Result<(&VectorIndexDef, &Arc<BTree<P>>)> {
+        let pos = self.vector_pos(name)?;
+        Ok((&self.meta.vector_indexes[pos], &self.vector_trees[pos]))
+    }
+
+    fn hnsw(&self, name: &str) -> ndb_common::Result<(&VectorIndexDef, HnswIndex<P>)> {
+        let (def, tree) = self.vector_pair(name)?;
+        Ok((def, HnswIndex::open(Arc::clone(tree))))
+    }
+
+    /// Creates an HNSW index over `field` (a `Value::Vector` document field)
+    /// and backfills from existing documents (spec §10.2, §10.5).
+    pub fn create_vector_index(
+        &mut self,
+        txn: &mut Transaction<'_, P>,
+        name: &str,
+        field: &str,
+        cfg: HnswConfig,
+    ) -> ndb_common::Result<()> {
+        if self.meta.vector_indexes.iter().any(|d| d.name == name)
+            || self.meta.text_indexes.iter().any(|d| d.name == name)
+            || self.meta.indexes.iter().any(|d| d.name == name)
+        {
+            return Err(Error::InvalidInput(format!(
+                "index '{name}' already exists"
+            )));
+        }
+        if cfg.dims == 0 {
+            return Err(Error::InvalidInput("vector index dims must be > 0".into()));
+        }
+        let tree = Arc::new(BTree::create(Arc::clone(self.docstore.pool()))?);
+        let hnsw = HnswIndex::create(Arc::clone(&tree), txn, cfg.clone())?;
+
+        // Backfill — docs whose field already carries a conforming vector.
+        for (_key, entry) in txn.scan_in(&self.pk)? {
+            let bytes = self.docstore.read(&entry)?;
+            let doc = codec::decode(&bytes, &self.meta.dict)?;
+            if let Some(v) = vector_field_value(&doc, field)
+                && v.len() == cfg.dims as usize
+            {
+                hnsw.insert(txn, doc.id.get(), v)?;
+            }
+        }
+
+        self.meta.vector_indexes.push(VectorIndexDef {
+            name: name.to_string(),
+            field: field.to_string(),
+            dims: cfg.dims,
+            metric: cfg.metric as u8,
+            m: cfg.m as u16,
+            ef_construction: cfg.ef_construction as u16,
+            ef_search: cfg.ef_search as u16,
+            root: tree.root_id(),
+        });
+        self.vector_trees.push(tree);
+        self.dirty = true;
+        self.auto_save(txn)
+    }
+
+    /// Drops a vector index definition + its tree pointer (§10.5 admin).
+    pub fn drop_vector_index(
+        &mut self,
+        txn: &mut Transaction<'_, P>,
+        name: &str,
+    ) -> ndb_common::Result<()> {
+        let pos = self.vector_pos(name)?;
+        self.meta.vector_indexes.remove(pos);
+        self.vector_trees.remove(pos);
+        self.dirty = true;
+        self.auto_save(txn)
+    }
+
+    /// Per-doc maintenance on insert/update (§10.5): the HNSW `update`
+    /// reconciles add/change; absent fields become a delete (doc updated to
+    /// no longer carry the field).
+    fn index_vector_fields(
+        &mut self,
+        txn: &mut Transaction<'_, P>,
+        doc: &Document,
+    ) -> ndb_common::Result<()> {
+        for pos in 0..self.meta.vector_indexes.len() {
+            let tree = Arc::clone(&self.vector_trees[pos]);
+            let field = self.meta.vector_indexes[pos].field.clone();
+            let hnsw = HnswIndex::<P>::open(tree);
+            match vector_field_value(doc, &field) {
+                Some(v) => {
+                    // insert fails on duplicate id → use update for idempotent
+                    // maintenance (update() = delete+insert, see §10.5).
+                    hnsw.update(txn, doc.id.get(), v)?;
+                }
+                None => {
+                    hnsw.delete(txn, doc.id.get())?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes the doc's vector from every HNSW index (§10.5 delete path).
+    fn remove_vector_entries(
+        &mut self,
+        txn: &mut Transaction<'_, P>,
+        old: &Document,
+    ) -> ndb_common::Result<()> {
+        for pos in 0..self.meta.vector_indexes.len() {
+            let tree = Arc::clone(&self.vector_trees[pos]);
+            HnswIndex::<P>::open(tree).delete(txn, old.id.get())?;
+        }
+        Ok(())
+    }
+
+    /// Approximate k-NN (spec §10.4): returns the top-k documents by metric
+    /// score — payload fetched only for the surviving ids (§11.3 late
+    /// materialization applies here too).
+    pub fn search_vector(
+        &self,
+        txn: &Transaction<'_, P>,
+        name: &str,
+        vector: &[f32],
+        k: usize,
+        ef: usize,
+    ) -> ndb_common::Result<Vec<VectorHit>> {
+        let (_def, hnsw) = self.hnsw(name)?;
+        let hits = hnsw.search(txn, vector, k, ef, None)?;
+        let mut out = Vec::with_capacity(hits.len());
+        for (doc_id, score) in hits {
+            if let Some(doc) = self.get(txn, DocumentId::new(doc_id))? {
+                out.push(VectorHit {
+                    doc_id: DocumentId::new(doc_id),
+                    doc,
+                    score: score as f64,
+                    legs: vec!["vector".to_string()],
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Hybrid execution (spec §11.3): validates the query, runs the text +
+    /// vector legs as compact `(doc_id, score)` candidates, applies the
+    /// candidate filter before RRF, fetches payloads only for the final set,
+    /// and returns fused hits.
+    pub fn search_hybrid(
+        &self,
+        txn: &Transaction<'_, P>,
+        query: &ndb_hybrid::HybridQuery,
+    ) -> ndb_common::Result<Vec<VectorHit>> {
+        query.validate()?; // §11.3 step 1 — validate
+        let fetch_k = if query.fetch_k > 0 {
+            query.fetch_k
+        } else {
+            query.limit.saturating_mul(4).max(query.limit)
+        };
+        let pred = query.candidate_filter.as_deref();
+
+        // §11.3 steps 4–5 — retrieval legs (compact candidates only).
+        let mut legs: Vec<(Leg, Vec<Candidate>)> = Vec::new();
+        if let Some(text_leg) = &query.text {
+            let hits = self.search_text(txn, &text_leg.index, &text_leg.query, fetch_k)?;
+            let cands: Vec<Candidate> = hits
+                .into_iter()
+                .map(|h| Candidate {
+                    doc: h.doc_id.get(),
+                    score: h.score as f32,
+                })
+                .collect();
+            legs.push((Leg::Text, cands));
+        }
+        if let Some(vec_leg) = &query.vector {
+            let (_def, hnsw) = self.hnsw(&vec_leg.index)?;
+            let ef = if vec_leg.ef > 0 {
+                vec_leg.ef
+            } else {
+                fetch_k.max(16)
+            };
+            let hits = hnsw.search(txn, &vec_leg.vector, fetch_k, ef, pred)?;
+            legs.push((
+                Leg::Vector,
+                hits.into_iter()
+                    .map(|(d, s)| Candidate { doc: d, score: s })
+                    .collect(),
+            ));
+        }
+
+        // §11.3 steps 6–7 — merge + fusion scores (candidate filter applied
+        // to non-vector legs as well so excluded ids can't win rank slots).
+        if pred.is_some() {
+            for (_kind, list) in legs.iter_mut() {
+                list.retain(|c| pred.unwrap()(c.doc));
+            }
+        }
+        let fused = fuseHybrid(query, &legs, query.limit);
+
+        // §11.3 steps 8–10 — fetch payloads + final ranking.
+        let mut out = Vec::with_capacity(fused.len());
+        for hit in fused {
+            if let Some(doc) = self.get(txn, DocumentId::new(hit.doc))? {
+                out.push(VectorHit {
+                    doc_id: DocumentId::new(hit.doc),
+                    doc,
+                    score: hit.score,
+                    legs: hit
+                        .legs
+                        .iter()
+                        .map(|l| format!("{l:?}").to_lowercase())
+                        .collect(),
+                });
+            }
+        }
+        Ok(out)
     }
 }

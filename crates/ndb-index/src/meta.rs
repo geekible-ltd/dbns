@@ -54,6 +54,21 @@ pub struct TextIndexDef {
     pub root: PageId,
 }
 
+/// A vector index definition (spec §10.2): an HNSW graph over one
+/// `Value::Vector` field, in a dedicated tree.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VectorIndexDef {
+    pub name: String,
+    pub field: String,
+    pub dims: u16,
+    /// 0=cosine, 1=dot, 2=euclidean (`ndb_vector::Metric`).
+    pub metric: u8,
+    pub m: u16,
+    pub ef_construction: u16,
+    pub ef_search: u16,
+    pub root: PageId,
+}
+
 /// Everything needed to open a collection — persisted as one catalog value.
 #[derive(Debug, Clone)]
 pub struct CollectionMeta {
@@ -68,6 +83,8 @@ pub struct CollectionMeta {
     pub indexes: Vec<IndexDef>,
     /// Full-text indexes (spec §9.1).
     pub text_indexes: Vec<TextIndexDef>,
+    /// Vector (HNSW) indexes (spec §10).
+    pub vector_indexes: Vec<VectorIndexDef>,
 }
 
 impl CollectionMeta {
@@ -134,6 +151,20 @@ impl CollectionMeta {
                 put_u32(&mut out, f.analyzer_cfg.len() as u32);
                 out.extend_from_slice(&f.analyzer_cfg);
             }
+        }
+        // vector indexes (appended — older decoders stop earlier)
+        put_u16(&mut out, self.vector_indexes.len() as u16);
+        for v in &self.vector_indexes {
+            put_u16(&mut out, v.name.len() as u16);
+            out.extend_from_slice(v.name.as_bytes());
+            put_u16(&mut out, v.field.len() as u16);
+            out.extend_from_slice(v.field.as_bytes());
+            put_u16(&mut out, v.dims);
+            out.push(v.metric);
+            put_u16(&mut out, v.m);
+            put_u16(&mut out, v.ef_construction);
+            put_u16(&mut out, v.ef_search);
+            put_u64(&mut out, v.root.get());
         }
         out
     }
@@ -239,6 +270,34 @@ impl CollectionMeta {
                 });
             }
         }
+        // Vector indexes are a second trailing extension.
+        let mut vector_indexes = Vec::new();
+        if r.pos < buf.len() {
+            let n = r.u16()? as usize;
+            for _ in 0..n {
+                let nlen = r.u16()? as usize;
+                let vname = String::from_utf8(r.bytes(nlen)?.to_vec())
+                    .map_err(|_| Error::Corruption("meta: bad utf8 vec idx name".into()))?;
+                let flen = r.u16()? as usize;
+                let field = String::from_utf8(r.bytes(flen)?.to_vec())
+                    .map_err(|_| Error::Corruption("meta: bad utf8 vec field".into()))?;
+                let dims = r.u16()?;
+                let metric = r.bytes(1)?[0];
+                if metric > 2 {
+                    return Err(Error::Corruption("meta: bad vec metric".into()));
+                }
+                vector_indexes.push(VectorIndexDef {
+                    name: vname,
+                    field,
+                    dims,
+                    metric,
+                    m: r.u16()?,
+                    ef_construction: r.u16()?,
+                    ef_search: r.u16()?,
+                    root: PageId::new(r.u64()?),
+                });
+            }
+        }
         r.expect_end()?;
         Ok(CollectionMeta {
             id,
@@ -250,6 +309,7 @@ impl CollectionMeta {
             schema,
             indexes,
             text_indexes,
+            vector_indexes,
         })
     }
 }

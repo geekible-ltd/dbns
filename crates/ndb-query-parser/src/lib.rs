@@ -191,6 +191,31 @@ fn parse_logical(op: &str, v: &J) -> ndb_common::Result<Expr> {
                 .unwrap_or_default();
             Ok(Expr::Text { index, query })
         }
+        "$vectorSearch" => {
+            // {"­$vectorSearch": {"index": "v", "field": "emb",
+            //   "vector": [...], "k": 10, "ef": 64}} — §12.7 access path.
+            let o = v.as_object().ok_or_else(|| {
+                Error::InvalidInput("query: '$vectorSearch' needs an object".into())
+            })?;
+            let vector = opt_vec_f32(o, "vector").ok_or_else(|| {
+                Error::InvalidInput("query: '$vectorSearch' needs vector[]".into())
+            })?;
+            let field = opt_str(o, "field")
+                .or_else(|| opt_str(o, "$field"))
+                .unwrap_or_default();
+            let index = opt_str(o, "index")
+                .or_else(|| opt_str(o, "$index"))
+                .unwrap_or_default();
+            let k = o.get("k").and_then(J::as_i64).unwrap_or(10).max(1) as usize;
+            let ef = o.get("ef").and_then(J::as_i64).unwrap_or(0).max(0) as usize;
+            Ok(Expr::VectorSearch {
+                index,
+                field,
+                vector,
+                k,
+                ef,
+            })
+        }
         "$not" => {
             let inner = v
                 .as_object()
@@ -208,6 +233,19 @@ fn parse_logical(op: &str, v: &J) -> ndb_common::Result<Expr> {
 /// MongoDB puts `$text` at top level: `{"$text": {"$search": "cake"}}`.
 /// We accept both `{ "$text": {"$search": q, "$index": name} }` inside a
 /// filter object and field-level `{"$phrase": …}`/`{"$fuzzy": …}` clauses.
+fn opt_vec_f32(o: &serde_json::Map<String, J>, key: &str) -> Option<Vec<f32>> {
+    match o.get(key)? {
+        J::Array(a) => {
+            let mut out = Vec::with_capacity(a.len());
+            for e in a {
+                out.push(e.as_f64()? as f32);
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
 fn parse_field_clause(field: &str, v: &J) -> ndb_common::Result<Expr> {
     match v {
         // Bare value → $eq
@@ -322,6 +360,26 @@ fn parse_op_clause(field: &str, op: &str, operand: &J) -> ndb_common::Result<Exp
                 term,
                 max_edits,
                 max_expansions,
+            })
+        }
+        "$vectorFilter" => {
+            // {"emb": {"$vectorFilter": {"vector": [...], "minScore": 0.7}}}
+            // — §12.7 residual predicate (cosine similarity threshold).
+            let o = operand.as_object().ok_or_else(|| {
+                Error::InvalidInput("query: '$vectorFilter' needs an object".into())
+            })?;
+            let vector = opt_vec_f32(o, "vector").ok_or_else(|| {
+                Error::InvalidInput("query: '$vectorFilter' needs vector[]".into())
+            })?;
+            let min_score = o
+                .get("minScore")
+                .or_else(|| o.get("min_score"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0) as f32;
+            Ok(Expr::VectorFilter {
+                field: field.to_string(),
+                vector,
+                min_score,
             })
         }
         _ => err(format!("unknown operator '{op}'")),

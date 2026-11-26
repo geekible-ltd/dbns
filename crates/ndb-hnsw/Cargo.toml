@@ -1,0 +1,16 @@
+[package]
+name = "ndb-hnsw"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ndb-common = { path = "../ndb-common" }
+ndb-btree = { path = "../ndb-btree" }
+ndb-transaction = { path = "../ndb-transaction" }
+ndb-vector = { path = "../ndb-vector" }
+ndb-page = { path = "../ndb-page" }
+
+[dev-dependencies]
+ndb-buffer = { path = "../ndb-buffer" }
+ndb-wal = { path = "../ndb-wal" }
+tempfile.workspace = true

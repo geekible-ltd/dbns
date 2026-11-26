@@ -9,12 +9,29 @@ architectural decisions. This file is a working summary, not a replacement.
 
 ## Current state
 
+Phase 7 complete — vector + hybrid search (see `docs/progress.md`):
+- `ndb-vector` — cosine/dot/euclidean metrics; `EncodedVector` codec
+  (f32 reference + f16/int8 quantisation groundwork).
+- `ndb-hnsw` — HNSW graph stored in the index B+Tree (`VM`/`VD`/`NG`/`DX`
+  keys): persisted xorshift level selection, ef_construction beam, diversity
+  neighbour heuristic + reciprocal M-pruning, tombstone deletes with
+  entry-point reselection; recall@10 = 1.0 @ 400 docs. ADR-013.
+- `ndb-hybrid` — RRF fusion (configurable k/weights), compact
+  `Candidate{doc_id,score}`, provenance; §11.3 candidate-filter-before-
+  fusion + late materialization. ADR-014.
+- `ndb-index` — `VectorIndexDef` (trailing meta section v3),
+  create/backfill/drop vector index, synchronous maintenance,
+  `search_vector`/`search_hybrid`; `VectorHit`.
+- Query layer — `Expr::VectorSearch`/`VectorFilter`,
+  `AccessPath::VectorSearch`, `$vectorSearch` top-level + `$vectorFilter`
+  field-clause parse → plan → execute.
+
 Phase 6 complete — query engine (see `docs/progress.md`):
 - `ndb-query-ast` — versioned grammar, `Expr`/`FindQuery`/`Pipeline`,
   operator catalogue.
 - `ndb-query-parser` — JSON → AST (serde_json); `json_to_value`.
-- `ndb-query-planner` — `Plan`/`AccessPath` (pk, index ranges, text, scan),
-  `PlanStats` view, leftmost-prefix matching.
+- `ndb-query-planner` — `Plan`/`AccessPath` (pk, index ranges, text, vector,
+  scan), `PlanStats` view, leftmost-prefix matching.
 - `ndb-query-optimizer` — cost pick, filter ordering, shape-keyed plan cache.
 - `ndb-query-executor` — eval/sort/top-K/projection, `ExecLimits`
   (time/scan/bytes/cancel), EXPLAIN via `explain()`.

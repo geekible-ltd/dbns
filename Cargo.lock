@@ -734,6 +734,7 @@ dependencies = [
  "ndb-buffer",
  "ndb-common",
  "ndb-document",
+ "ndb-hnsw",
  "ndb-index",
  "ndb-page",
  "ndb-query-ast",
@@ -742,6 +743,7 @@ dependencies = [
  "ndb-query-parser",
  "ndb-query-planner",
  "ndb-transaction",
+ "ndb-vector",
  "ndb-wal",
  "tempfile",
 ]
@@ -820,6 +822,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "ndb-hnsw"
+version = "0.1.0"
+dependencies = [
+ "ndb-btree",
+ "ndb-buffer",
+ "ndb-common",
+ "ndb-page",
+ "ndb-transaction",
+ "ndb-vector",
+ "ndb-wal",
+ "tempfile",
+]
+
+[[package]]
+name = "ndb-hybrid"
+version = "0.1.0"
+dependencies = [
+ "ndb-common",
+]
+
+[[package]]
 name = "ndb-index"
 version = "0.1.0"
 dependencies = [
@@ -830,10 +853,13 @@ dependencies = [
  "ndb-common",
  "ndb-document",
  "ndb-fuzzy",
+ "ndb-hnsw",
+ "ndb-hybrid",
  "ndb-inverted",
  "ndb-page",
  "ndb-tokenizer",
  "ndb-transaction",
+ "ndb-vector",
  "ndb-wal",
  "tempfile",
 ]
@@ -890,6 +916,7 @@ dependencies = [
  "ndb-query-ast",
  "ndb-query-planner",
  "ndb-transaction",
+ "ndb-vector",
  "ndb-wal",
  "tempfile",
 ]
@@ -963,6 +990,13 @@ dependencies = [
  "ndb-page",
  "ndb-wal",
  "tempfile",
+]
+
+[[package]]
+name = "ndb-vector"
+version = "0.1.0"
+dependencies = [
+ "ndb-common",
 ]
 
 [[package]]

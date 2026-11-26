@@ -185,6 +185,18 @@ pub fn eval(e: &Expr, doc: &Document) -> ndb_common::Result<bool> {
         },
         // Text ops are access-path drivers — as residual predicates they
         // pass (the search already restricted the candidate set).
+        Expr::VectorFilter {
+            field,
+            vector,
+            min_score,
+        } => {
+            // Cosine similarity against the doc's stored vector (§12.7).
+            let Some(ndb_document::Value::Vector(stored)) = get_path(doc, field) else {
+                return Ok(false);
+            };
+            ndb_vector::cosine(stored, vector) >= *min_score
+        }
+        Expr::VectorSearch { .. } => true,
         Expr::Text { .. } | Expr::Phrase { .. } | Expr::Fuzzy { .. } => true,
     })
 }
@@ -325,6 +337,28 @@ pub fn execute_find<P: PageIo>(
                     max_expansions,
                 } => coll.search_fuzzy(txn, index, field, term, *max_edits, *max_expansions, k)?,
             };
+            hits.into_iter()
+                .map(|h| (h.doc_id.get(), Some(h.score)))
+                .collect()
+        }
+        AccessPath::VectorSearch {
+            index,
+            vector,
+            k,
+            ef,
+            ..
+        } => {
+            // `k` is the semantic bound — residual filtering may drop
+            // candidates, it never expands the set.
+            let fetch = (*k).max(1);
+            let ef_n = if *ef > 0 {
+                *ef
+            } else {
+                fetch.saturating_mul(4).max(16)
+            };
+            let hits = coll.search_vector(txn, index, vector, fetch, ef_n)?;
+            // search_vector already materializes docs — reuse to avoid a
+            // second pk read; keep the scored-id stream contract.
             hits.into_iter()
                 .map(|h| (h.doc_id.get(), Some(h.score)))
                 .collect()
