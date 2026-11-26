@@ -1,0 +1,20 @@
+[package]
+name = "ndb-query-executor"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ndb-common = { path = "../ndb-common" }
+ndb-document = { path = "../ndb-document" }
+ndb-btree = { path = "../ndb-btree" }
+ndb-page = { path = "../ndb-page" }
+ndb-transaction = { path = "../ndb-transaction" }
+ndb-index = { path = "../ndb-index" }
+ndb-query-ast = { path = "../ndb-query-ast" }
+ndb-query-planner = { path = "../ndb-query-planner" }
+ndb-buffer = { path = "../ndb-buffer" }
+
+[dev-dependencies]
+ndb-buffer = { path = "../ndb-buffer" }
+ndb-wal = { path = "../ndb-wal" }
+tempfile = { workspace = true }

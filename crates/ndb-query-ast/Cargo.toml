@@ -1,0 +1,8 @@
+[package]
+name = "ndb-query-ast"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ndb-common = { path = "../ndb-common" }
+ndb-document = { path = "../ndb-document" }

@@ -118,9 +118,23 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       unimplemented; symmetric-delete fuzzy preindex deferred; async §7.3
       indexing pipeline deferred to distribution
 
-### Phases 6–11 (not started)
-- [ ] Phase 6 — query engine: parser, AST, planner, optimiser, aggregation,
-      EXPLAIN (spec §12–13)
+### Phase 6 — query engine (spec §12–13)
+- [x] AST + versioned grammar + operator catalogue (`ndb-query-ast`)
+- [x] MongoDB-style JSON parser — all §12.2–§12.6 ops (`ndb-query-parser`)
+- [x] Planner: pk/index/text/scan access paths, leftmost-prefix matching,
+      $in range fan-out, PlanStats-driven (`ndb-query-planner`)
+- [x] Optimiser: cost-based candidate choice, filter ordering, plan cache
+      (`ndb-query-optimizer`) — independent of parser/planner
+- [x] Executor: filter eval, sort/top-K, skip/limit, projection, EXPLAIN;
+      per-query time/scan/result limits + cancellation (`ndb-query-executor`)
+- [x] Aggregation: $match/$project/$group/$sort/$limit/$skip/$count/
+      $unwind/$addFields + $sum/$avg/$min/$max/$first/$last/$concat/
+      $toString/$ifNull; bounded-memory $group with B+Tree spill
+      (`ndb-aggregation` + `QueryEngine` facade)
+- [~] Cursor-based deep pagination, external merge sort, vector ops
+      (Phase 7)
+
+### Phases 7–11 (not started)
 - [ ] Phase 7 — vector + hybrid: vector storage, HNSW, RRF (spec §10–11)
 - [ ] Phase 8 — REST + gRPC + Rust SDK + management web UI (spec §15–16;
       UI: React/TypeScript SPA in `ui/`, separate frontend app, consumes the

@@ -9,6 +9,20 @@ architectural decisions. This file is a working summary, not a replacement.
 
 ## Current state
 
+Phase 6 complete — query engine (see `docs/progress.md`):
+- `ndb-query-ast` — versioned grammar, `Expr`/`FindQuery`/`Pipeline`,
+  operator catalogue.
+- `ndb-query-parser` — JSON → AST (serde_json); `json_to_value`.
+- `ndb-query-planner` — `Plan`/`AccessPath` (pk, index ranges, text, scan),
+  `PlanStats` view, leftmost-prefix matching.
+- `ndb-query-optimizer` — cost pick, filter ordering, shape-keyed plan cache.
+- `ndb-query-executor` — eval/sort/top-K/projection, `ExecLimits`
+  (time/scan/bytes/cancel), EXPLAIN via `explain()`.
+- `ndb-aggregation` — §12.9 stages + expressions, `$group` spilling to a
+  scratch B+Tree past `group_bytes_bound`; `QueryEngine` facade.
+- `ndb-index` — `lookup_ordered_range`, `scan_count_hint`; index.rs
+  `value_part` now pub. ADR-015.
+
 Phase 5 complete — full-text search (see `docs/progress.md`):
 - `ndb-tokenizer` — Unicode word-split, positions + byte offsets, `'s`
   possessive strip.

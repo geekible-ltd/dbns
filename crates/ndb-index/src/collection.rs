@@ -114,6 +114,12 @@ impl<P: PageIo> Collection<P> {
         &self.meta.schema
     }
 
+    /// Approximate live-document count for cost estimation (§13) —
+    /// derived from the doc-id cursor; overestimates after deletes.
+    pub fn scan_count_hint(&self) -> u64 {
+        self.id_cursor.saturating_sub(1)
+    }
+
     fn pk_key(id: DocumentId) -> [u8; 8] {
         id.get().to_be_bytes()
     }
@@ -355,6 +361,42 @@ impl<P: PageIo> Collection<P> {
                         .map_err(|_| Error::Corruption("index: bad doc_id value".into()))?,
                 );
                 out.push(DocumentId::new(id));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Range scan over pre-encoded key bounds (used by the query executor):
+    /// `field_key >= lo` and `< hi` (or `<= hi` when `inclusive_hi`).
+    /// Returns `(full_key, doc_id)` pairs in key order.
+    pub fn lookup_ordered_range(
+        &self,
+        txn: &Transaction<'_, P>,
+        name: &str,
+        lo: &[u8],
+        hi: Option<&[u8]>,
+        inclusive_hi: bool,
+    ) -> ndb_common::Result<Vec<(Vec<u8>, DocumentId)>> {
+        let (def, tree) = self.index_pair(name)?;
+        let mut out = Vec::new();
+        for (k, v) in txn.scan_in(tree)? {
+            let field_key = if def.unique || k.len() < 9 {
+                k.as_slice()
+            } else {
+                &k[..k.len() - 9]
+            };
+            let below = field_key >= lo;
+            let above = match hi {
+                Some(h) if inclusive_hi => field_key <= h,
+                Some(h) => field_key < h,
+                None => true,
+            };
+            if below && above {
+                let id = u64::from_le_bytes(
+                    v.try_into()
+                        .map_err(|_| Error::Corruption("index: bad doc_id value".into()))?,
+                );
+                out.push((k, DocumentId::new(id)));
             }
         }
         Ok(out)

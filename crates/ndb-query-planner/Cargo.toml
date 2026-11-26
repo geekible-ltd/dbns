@@ -1,0 +1,10 @@
+[package]
+name = "ndb-query-planner"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ndb-common = { path = "../ndb-common" }
+ndb-document = { path = "../ndb-document" }
+ndb-btree = { path = "../ndb-btree" }
+ndb-query-ast = { path = "../ndb-query-ast" }

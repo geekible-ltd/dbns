@@ -726,6 +726,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "ndb-aggregation"
+version = "0.1.0"
+dependencies = [
+ "ndb-analyzer",
+ "ndb-btree",
+ "ndb-buffer",
+ "ndb-common",
+ "ndb-document",
+ "ndb-index",
+ "ndb-page",
+ "ndb-query-ast",
+ "ndb-query-executor",
+ "ndb-query-optimizer",
+ "ndb-query-parser",
+ "ndb-query-planner",
+ "ndb-transaction",
+ "ndb-wal",
+ "tempfile",
+]
+
+[[package]]
 name = "ndb-analyzer"
 version = "0.1.0"
 dependencies = [
@@ -846,6 +867,61 @@ version = "0.1.0"
 dependencies = [
  "ndb-common",
  "proptest",
+]
+
+[[package]]
+name = "ndb-query-ast"
+version = "0.1.0"
+dependencies = [
+ "ndb-common",
+ "ndb-document",
+]
+
+[[package]]
+name = "ndb-query-executor"
+version = "0.1.0"
+dependencies = [
+ "ndb-btree",
+ "ndb-buffer",
+ "ndb-common",
+ "ndb-document",
+ "ndb-index",
+ "ndb-page",
+ "ndb-query-ast",
+ "ndb-query-planner",
+ "ndb-transaction",
+ "ndb-wal",
+ "tempfile",
+]
+
+[[package]]
+name = "ndb-query-optimizer"
+version = "0.1.0"
+dependencies = [
+ "ndb-common",
+ "ndb-document",
+ "ndb-query-ast",
+ "ndb-query-planner",
+]
+
+[[package]]
+name = "ndb-query-parser"
+version = "0.1.0"
+dependencies = [
+ "ndb-common",
+ "ndb-document",
+ "ndb-query-ast",
+ "serde_json",
+]
+
+[[package]]
+name = "ndb-query-planner"
+version = "0.1.0"
+dependencies = [
+ "ndb-btree",
+ "ndb-common",
+ "ndb-document",
+ "ndb-query-ast",
 ]
 
 [[package]]

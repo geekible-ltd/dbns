@@ -19,7 +19,7 @@ use ndb_common::error::Error;
 use ndb_document::{DataType, Value};
 
 /// Maps a document field value to an order-preserving key part.
-fn value_part(v: &Value) -> ndb_common::Result<KeyPart> {
+pub fn value_part(v: &Value) -> ndb_common::Result<KeyPart> {
     Ok(match v {
         Value::Bool(b) => KeyPart::Bool(*b),
         Value::Int(i) => KeyPart::Int(*i),

@@ -1,0 +1,10 @@
+[package]
+name = "ndb-query-optimizer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ndb-common = { path = "../ndb-common" }
+ndb-document = { path = "../ndb-document" }
+ndb-query-ast = { path = "../ndb-query-ast" }
+ndb-query-planner = { path = "../ndb-query-planner" }
