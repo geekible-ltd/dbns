@@ -1,0 +1,7 @@
+[package]
+name = "ndb-wal"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ndb-common.workspace = true

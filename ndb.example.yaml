@@ -1,0 +1,63 @@
+# NDB server configuration (spec §25)
+# Copy to ndb.yaml and adjust. All values are validated before server start.
+
+version: 1
+
+node:
+  id: node-001
+  listen_address: 0.0.0.0
+  rest_port: 8080
+  grpc_port: 9090
+
+cluster:
+  name: ndb-cluster
+  replication_factor: 3
+  consensus: raft
+  virtual_shards: 256
+
+storage:
+  path: ./data
+  page_size: 16384
+  buffer_pool_size: 3GB
+  wal_enabled: true
+  checkpoint_interval_seconds: 60
+
+transactions:
+  isolation: snapshot
+  timeout_seconds: 30
+
+indexing:
+  max_visibility_seconds: 5
+  batch_size: 1000
+  max_workers: 8
+  durable_queue: true
+
+search:
+  default_limit: 20
+  max_limit: 1000
+
+  bm25:
+    k1: 1.2
+    b: 0.75
+
+  fuzzy:
+    enabled: true
+    max_distance: 2
+
+vector:
+  default_algorithm: hnsw
+  default_metric: cosine
+
+security:
+  authentication_enabled: true
+  tls_enabled: true
+  encryption_at_rest: true
+  audit_enabled: true
+
+logging:
+  level: info
+  structured: true
+
+monitoring:
+  metrics_enabled: true
+  metrics_port: 9091

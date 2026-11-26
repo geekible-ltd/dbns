@@ -1,0 +1,31 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+# Internal crates (spec §29 — initial iteration only)
+ndb-common = { path = "crates/ndb-common" }
+ndb-config = { path = "crates/ndb-config" }
+
+# Error handling
+thiserror = "2"
+
+# Serialisation
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+
+# Async runtime
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+
+# Logging / metrics
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+metrics = "0.24"
+metrics-exporter-prometheus = "0.17"
+
+# CLI
+clap = { version = "4", features = ["derive"] }

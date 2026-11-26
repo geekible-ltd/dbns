@@ -1,0 +1,11 @@
+[package]
+name = "ndb-config"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ndb-common.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+tracing-subscriber.workspace = true
