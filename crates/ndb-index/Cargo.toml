@@ -11,6 +11,11 @@ ndb-buffer = { path = "../ndb-buffer" }
 ndb-btree = { path = "../ndb-btree" }
 ndb-transaction = { path = "../ndb-transaction" }
 ndb-wal = { path = "../ndb-wal" }
+ndb-tokenizer = { path = "../ndb-tokenizer" }
+ndb-analyzer = { path = "../ndb-analyzer" }
+ndb-inverted = { path = "../ndb-inverted" }
+ndb-bm25 = { path = "../ndb-bm25" }
+ndb-fuzzy = { path = "../ndb-fuzzy" }
 
 [dev-dependencies]
 tempfile.workspace = true

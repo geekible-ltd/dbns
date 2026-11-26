@@ -1,0 +1,10 @@
+[package]
+name = "ndb-postings"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ndb-common = { path = "../ndb-common" }
+
+[dev-dependencies]
+proptest = { workspace = true }

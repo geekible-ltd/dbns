@@ -97,9 +97,28 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       to query phase; record-page reclamation on version GC deferred to
       persisted-freelist work
 
-### Phases 5–11 (not started)
-- [ ] Phase 5 — full-text search: tokenizer, analyser, inverted index, BM25,
-      phrase, fuzzy, segments (spec §9)
+### Phase 5 — full-text search (spec §9)
+- [x] Tokenizer: Unicode word-split with positions + offsets
+      (`ndb-tokenizer`), `'s`-possessive stripping
+- [x] Versioned analyzer: normalize/case-fold/stop-words/Porter/synonyms,
+      per-field configs (`ndb-analyzer`); analyzer-version bumps pin a
+      rebuild per §9.2
+- [x] Posting codec: page-bounded chunks, delta+varint docids/tf/positions,
+      block-max tf + last-doc metadata (`ndb-postings`)
+- [x] Inverted index: per-index B+Tree, copy-on-write tail chunks, term
+      dictionary, doc/collection stats, physical posting removal, compaction
+      (`ndb-inverted`)
+- [x] BM25 (k1=1.2/b=0.75 configurable, per-field weights) (`ndb-bm25`)
+- [x] Phrase search with slop; fuzzy via bounded-Levenshtein dictionary
+      expansion with caps (`ndb-fuzzy`)
+- [x] Collection integration: `create_text_index`/`search_text`/
+      `search_phrase`/`search_fuzzy`/`compact_text_index`/`rebuild_text_index`,
+      synchronous in-txn indexing maintenance
+- [~] WAND/Block-Max WAND top-K pruning — block-max metadata stored, pruning
+      unimplemented; symmetric-delete fuzzy preindex deferred; async §7.3
+      indexing pipeline deferred to distribution
+
+### Phases 6–11 (not started)
 - [ ] Phase 6 — query engine: parser, AST, planner, optimiser, aggregation,
       EXPLAIN (spec §12–13)
 - [ ] Phase 7 — vector + hybrid: vector storage, HNSW, RRF (spec §10–11)

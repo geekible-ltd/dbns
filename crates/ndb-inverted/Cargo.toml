@@ -1,0 +1,17 @@
+[package]
+name = "ndb-inverted"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ndb-common = { path = "../ndb-common" }
+ndb-page = { path = "../ndb-page" }
+ndb-buffer = { path = "../ndb-buffer" }
+ndb-btree = { path = "../ndb-btree" }
+ndb-postings = { path = "../ndb-postings" }
+ndb-transaction = { path = "../ndb-transaction" }
+ndb-tokenizer = { path = "../ndb-tokenizer" }
+
+[dev-dependencies]
+ndb-config = { path = "../ndb-config" }
+tempfile = { workspace = true }

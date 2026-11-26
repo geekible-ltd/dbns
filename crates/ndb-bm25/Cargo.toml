@@ -1,0 +1,8 @@
+[package]
+name = "ndb-bm25"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ndb-common = { path = "../ndb-common" }
+ndb-inverted = { path = "../ndb-inverted" }

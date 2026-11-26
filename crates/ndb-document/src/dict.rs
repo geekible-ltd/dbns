@@ -54,6 +54,11 @@ impl FieldDictionary {
         self.by_id.is_empty()
     }
 
+    /// Looks up `name` without interning — `None` for unseen fields.
+    pub fn id(&self, name: &str) -> Option<FieldId> {
+        self.by_name.get(name).copied()
+    }
+
     /// Returns the ID for `name`, assigning a new one if the field has not
     /// been seen before. Used when encoding schemaless documents.
     pub fn intern(&mut self, name: &str) -> FieldId {

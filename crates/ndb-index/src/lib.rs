@@ -175,6 +175,7 @@ impl<P: PageIo> Engine<P> {
             dict: Default::default(),
             schema,
             indexes: Vec::new(),
+            text_indexes: Vec::new(),
         };
         txn.insert(&key, &meta.encode())?;
         Ok(id)

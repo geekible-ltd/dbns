@@ -726,6 +726,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ndb-analyzer"
+version = "0.1.0"
+dependencies = [
+ "ndb-common",
+ "ndb-tokenizer",
+]
+
+[[package]]
+name = "ndb-bm25"
+version = "0.1.0"
+dependencies = [
+ "ndb-common",
+ "ndb-inverted",
+]
+
+[[package]]
 name = "ndb-btree"
 version = "0.1.0"
 dependencies = [
@@ -772,16 +788,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "ndb-fuzzy"
+version = "0.1.0"
+dependencies = [
+ "ndb-btree",
+ "ndb-common",
+ "ndb-inverted",
+ "ndb-page",
+ "ndb-transaction",
+]
+
+[[package]]
 name = "ndb-index"
+version = "0.1.0"
+dependencies = [
+ "ndb-analyzer",
+ "ndb-bm25",
+ "ndb-btree",
+ "ndb-buffer",
+ "ndb-common",
+ "ndb-document",
+ "ndb-fuzzy",
+ "ndb-inverted",
+ "ndb-page",
+ "ndb-tokenizer",
+ "ndb-transaction",
+ "ndb-wal",
+ "tempfile",
+]
+
+[[package]]
+name = "ndb-inverted"
 version = "0.1.0"
 dependencies = [
  "ndb-btree",
  "ndb-buffer",
  "ndb-common",
- "ndb-document",
+ "ndb-config",
  "ndb-page",
+ "ndb-postings",
+ "ndb-tokenizer",
  "ndb-transaction",
- "ndb-wal",
  "tempfile",
 ]
 
@@ -791,6 +838,14 @@ version = "0.1.0"
 dependencies = [
  "crc32fast",
  "ndb-common",
+]
+
+[[package]]
+name = "ndb-postings"
+version = "0.1.0"
+dependencies = [
+ "ndb-common",
+ "proptest",
 ]
 
 [[package]]
@@ -813,6 +868,13 @@ version = "0.1.0"
 dependencies = [
  "ndb-common",
  "ndb-page",
+]
+
+[[package]]
+name = "ndb-tokenizer"
+version = "0.1.0"
+dependencies = [
+ "ndb-common",
 ]
 
 [[package]]

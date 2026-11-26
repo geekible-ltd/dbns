@@ -10,12 +10,16 @@
 
 use crate::docstore::DocStore;
 use crate::index;
-use crate::meta::{CollectionMeta, IndexDef};
+use crate::meta::{CollectionMeta, IndexDef, TextFieldDef, TextIndexDef};
+use ndb_analyzer::{Analyzer, AnalyzerConfig};
+use ndb_bm25::{Bm25, WeightedScorer};
 use ndb_btree::BTree;
 use ndb_btree::key::{KeyPart, encode_composite};
 use ndb_common::error::Error;
 use ndb_common::ids::DocumentId;
 use ndb_document::{Document, EncodeOptions, Schema, codec};
+use ndb_inverted::query::{Hit, TextQuery};
+use ndb_inverted::{FieldText, InvertedIndex};
 use ndb_page::manager::PageIo;
 use ndb_transaction::Transaction;
 use std::sync::Arc;
@@ -32,6 +36,8 @@ pub struct Collection<P: PageIo> {
     pk: Arc<BTree<P>>,
     /// Index B+Trees, parallel to `meta.indexes`.
     index_trees: Vec<Arc<BTree<P>>>,
+    /// Full-text index trees, parallel to `meta.text_indexes` (§9.1).
+    text_trees: Vec<Arc<BTree<P>>>,
     docstore: DocStore<P>,
     /// The system catalog tree + this collection's key in it.
     catalog: Arc<BTree<P>>,
@@ -57,11 +63,16 @@ impl<P: PageIo> Collection<P> {
         for def in &meta.indexes {
             index_trees.push(Arc::new(BTree::open(Arc::clone(pool), def.root)?));
         }
+        let mut text_trees = Vec::with_capacity(meta.text_indexes.len());
+        for def in &meta.text_indexes {
+            text_trees.push(Arc::new(BTree::open(Arc::clone(pool), def.root)?));
+        }
         let id_cursor = meta.next_doc_id;
         Ok(Self {
             meta,
             pk,
             index_trees,
+            text_trees,
             docstore: DocStore::new(Arc::clone(pool)),
             catalog: Arc::clone(catalog),
             catalog_key,
@@ -159,6 +170,7 @@ impl<P: PageIo> Collection<P> {
         }
         let entry = self.docstore.write(&bytes)?;
         self.write_index_entries(txn, doc)?;
+        self.index_text_fields(txn, doc)?;
         txn.insert_in(&self.pk, &Self::pk_key(doc.id), &entry)?;
         self.auto_save(txn)
     }
@@ -197,6 +209,7 @@ impl<P: PageIo> Collection<P> {
             None => 0,
         };
         self.remove_index_entries(txn, &old)?;
+        self.remove_text_entries(txn, &old)?;
         let mut doc = doc;
         doc.id = id;
         self.insert_inner(txn, &doc, old_version + 1)
@@ -213,6 +226,7 @@ impl<P: PageIo> Collection<P> {
             return Ok(false);
         };
         self.remove_index_entries(txn, &old)?;
+        self.remove_text_entries(txn, &old)?;
         txn.delete_in(&self.pk, &Self::pk_key(id))
     }
 
@@ -450,6 +464,409 @@ impl<P: PageIo> Collection<P> {
             if let Some((k, _)) = index::entry(def, &doc.fields, doc.id.get())? {
                 txn.delete_in(tree, &k)?;
             }
+        }
+        Ok(())
+    }
+}
+
+// ── full-text search (spec §9) ─────────────────────────────────────────
+
+/// A scored document hit from `search_text`/`search_phrase`/`search_fuzzy`.
+#[derive(Debug)]
+pub struct TextHit {
+    pub doc_id: DocumentId,
+    pub doc: Document,
+    pub score: f64,
+}
+
+impl<P: PageIo> Collection<P> {
+    /// Creates a full-text index over `fields` — `(field, weight,
+    /// analyzer)` triples, so analysis is configured per field (§9.2) and
+    /// weighted per field (§9.3). Backfills from existing documents.
+    ///
+    /// The analyzer's `version` is pinned in the def — bumping it requires
+    /// `rebuild_text_index`; there is no silent tokenisation mix (§9.2).
+    pub fn create_text_index(
+        &mut self,
+        txn: &mut Transaction<'_, P>,
+        name: &str,
+        fields: &[(String, f64, AnalyzerConfig)],
+    ) -> ndb_common::Result<()> {
+        if fields.is_empty() {
+            return Err(Error::InvalidInput(
+                "text index needs at least one field".into(),
+            ));
+        }
+        if self.meta.text_indexes.iter().any(|d| d.name == name)
+            || self.meta.indexes.iter().any(|d| d.name == name)
+        {
+            return Err(Error::InvalidInput(format!(
+                "index '{name}' already exists"
+            )));
+        }
+        let tree = Arc::new(BTree::create(Arc::clone(self.docstore.pool()))?);
+        let def = TextIndexDef {
+            name: name.to_string(),
+            fields: fields
+                .iter()
+                .map(|(f, w, a)| TextFieldDef {
+                    field: f.clone(),
+                    weight: *w,
+                    analyzer_cfg: Analyzer::encode_cfg(a),
+                    analyzer_version: a.version,
+                })
+                .collect(),
+            root: tree.root_id(),
+        };
+        self.meta.text_indexes.push(def);
+        self.text_trees.push(Arc::clone(&tree));
+        self.dirty = true;
+        // Backfill through the normal maintenance path.
+        let docs: Vec<Document> = self.scan(txn)?.into_iter().map(|(_, d)| d).collect();
+        for doc in &docs {
+            self.index_one_text(txn, &tree, self.meta.text_indexes.len() - 1, doc)?;
+        }
+        self.auto_save(txn)
+    }
+
+    /// Drops a text index (its pages are orphaned — page freeing arrives
+    /// with the persisted free list).
+    pub fn drop_text_index(
+        &mut self,
+        txn: &mut Transaction<'_, P>,
+        name: &str,
+    ) -> ndb_common::Result<()> {
+        let pos = self.text_pos(name)?;
+        self.meta.text_indexes.remove(pos);
+        self.text_trees.remove(pos);
+        self.dirty = true;
+        self.auto_save(txn)
+    }
+
+    /// Rebuilds a text index — required after an analyzer version change
+    /// (§9.2) and used for repair. Backfills into a fresh tree and swaps
+    /// the root, all inside the caller's transaction.
+    pub fn rebuild_text_index(
+        &mut self,
+        txn: &mut Transaction<'_, P>,
+        name: &str,
+    ) -> ndb_common::Result<()> {
+        let pos = self.text_pos(name)?;
+        let tree = Arc::new(BTree::create(Arc::clone(self.docstore.pool()))?);
+        self.meta.text_indexes[pos].root = tree.root_id();
+        self.text_trees[pos] = Arc::clone(&tree);
+        let docs: Vec<Document> = self.scan(txn)?.into_iter().map(|(_, d)| d).collect();
+        for doc in &docs {
+            self.index_one_text(txn, &tree, pos, doc)?;
+        }
+        self.dirty = true;
+        self.auto_save(txn)
+    }
+
+    /// Physical compaction of a text index's posting chunks, dropping
+    /// deleted-doc postings (spec §9.4 index compaction).
+    pub fn compact_text_index(
+        &mut self,
+        txn: &mut Transaction<'_, P>,
+        name: &str,
+    ) -> ndb_common::Result<u64> {
+        let pos = self.text_pos(name)?;
+        InvertedIndex::compact(txn, self.docstore.pool(), &self.text_trees[pos])
+    }
+
+    /// BM25 match search (§9.3): `query_text` is analysed per indexed
+    /// field with that field's analyzer; hits merge across fields with
+    /// their configured weights.
+    pub fn search_text(
+        &self,
+        txn: &Transaction<'_, P>,
+        name: &str,
+        query_text: &str,
+        top_k: usize,
+    ) -> ndb_common::Result<Vec<TextHit>> {
+        let (def, tree) = self.text_pair(name)?;
+        let bm25 = Bm25::default();
+        let mut scores: std::collections::BTreeMap<u64, f64> = Default::default();
+        for f in &def.fields {
+            let Some(fid) = self.meta.dict.id(&f.field) else {
+                continue;
+            };
+            let cfg = Analyzer::decode_cfg(&f.analyzer_cfg)?;
+            let analyzer = Analyzer::new(cfg);
+            let terms: Vec<String> = analyzer
+                .analyze(query_text)
+                .into_iter()
+                .map(|t| t.text)
+                .collect();
+            if terms.is_empty() {
+                continue;
+            }
+            let q = TextQuery::Match {
+                field_id: fid.get() as u16,
+                terms,
+                must_all: false,
+            };
+            let scorer = WeightedScorer {
+                bm25: &bm25,
+                weight: f.weight,
+            };
+            for Hit { doc_id, score } in ndb_inverted::query::search(
+                txn,
+                self.docstore.pool(),
+                tree,
+                &q,
+                &scorer,
+                fid.get() as u16,
+                top_k,
+            )? {
+                *scores.entry(doc_id).or_default() += score;
+            }
+        }
+        self.materialise_hits(txn, scores, top_k)
+    }
+
+    /// Phrase search on one indexed field with positional slop (§9.5).
+    pub fn search_phrase(
+        &self,
+        txn: &Transaction<'_, P>,
+        name: &str,
+        field: &str,
+        phrase: &str,
+        slop: u32,
+        top_k: usize,
+    ) -> ndb_common::Result<Vec<TextHit>> {
+        let (def, tree) = self.text_pair(name)?;
+        let fdef = def
+            .fields
+            .iter()
+            .find(|f| f.field == field)
+            .ok_or_else(|| Error::InvalidInput(format!("field '{field}' not in index '{name}'")))?;
+        let fid = self
+            .meta
+            .dict
+            .id(field)
+            .ok_or_else(|| Error::InvalidInput(format!("field '{field}' never interned")))?;
+        let analyzer = Analyzer::new(Analyzer::decode_cfg(&fdef.analyzer_cfg)?);
+        let terms: Vec<String> = analyzer
+            .analyze(phrase)
+            .into_iter()
+            .map(|t| t.text)
+            .collect();
+        if terms.is_empty() {
+            return Ok(vec![]);
+        }
+        let q = TextQuery::Phrase {
+            field_id: fid.get() as u16,
+            terms,
+            slop,
+        };
+        let bm25 = Bm25::default();
+        let scorer = WeightedScorer {
+            bm25: &bm25,
+            weight: fdef.weight,
+        };
+        let hits = ndb_inverted::query::search(
+            txn,
+            self.docstore.pool(),
+            tree,
+            &q,
+            &scorer,
+            fid.get() as u16,
+            top_k,
+        )?;
+        let scores = hits.into_iter().map(|h| (h.doc_id, h.score)).collect();
+        self.materialise_hits(txn, scores, top_k)
+    }
+
+    /// Fuzzy search (§9.6): expand `term` over the field's term dictionary
+    /// within `max_edits`/`max_expansions`, then OR-match the expansions.
+    #[allow(clippy::too_many_arguments)] // mirrors spec §9.6 knobs
+    pub fn search_fuzzy(
+        &self,
+        txn: &Transaction<'_, P>,
+        name: &str,
+        field: &str,
+        term: &str,
+        max_edits: u32,
+        max_expansions: usize,
+        top_k: usize,
+    ) -> ndb_common::Result<Vec<TextHit>> {
+        let (def, tree) = self.text_pair(name)?;
+        let fdef = def
+            .fields
+            .iter()
+            .find(|f| f.field == field)
+            .ok_or_else(|| Error::InvalidInput(format!("field '{field}' not in index '{name}'")))?;
+        let fid = self
+            .meta
+            .dict
+            .id(field)
+            .ok_or_else(|| Error::InvalidInput(format!("field '{field}' never interned")))?;
+        let analyzer = Analyzer::new(Analyzer::decode_cfg(&fdef.analyzer_cfg)?);
+        let base = analyzer
+            .analyze(term)
+            .into_iter()
+            .map(|t| t.text)
+            .next()
+            .ok_or_else(|| Error::InvalidInput("fuzzy term analysed to nothing".into()))?;
+        let expanded = ndb_fuzzy::expand(
+            txn,
+            tree,
+            fid.get() as u16,
+            &base,
+            max_edits,
+            max_expansions,
+        )?;
+        if expanded.is_empty() {
+            return Ok(vec![]);
+        }
+        let q = TextQuery::Match {
+            field_id: fid.get() as u16,
+            terms: expanded,
+            must_all: false,
+        };
+        let bm25 = Bm25::default();
+        let scorer = WeightedScorer {
+            bm25: &bm25,
+            weight: fdef.weight,
+        };
+        let hits = ndb_inverted::query::search(
+            txn,
+            self.docstore.pool(),
+            tree,
+            &q,
+            &scorer,
+            fid.get() as u16,
+            top_k,
+        )?;
+        let scores = hits.into_iter().map(|h| (h.doc_id, h.score)).collect();
+        self.materialise_hits(txn, scores, top_k)
+    }
+
+    // ---- internals -----------------------------------------------------
+
+    fn text_pos(&self, name: &str) -> ndb_common::Result<usize> {
+        self.meta
+            .text_indexes
+            .iter()
+            .position(|d| d.name == name)
+            .ok_or_else(|| Error::InvalidInput(format!("text index '{name}' not found")))
+    }
+
+    fn text_pair(&self, name: &str) -> ndb_common::Result<(&TextIndexDef, &Arc<BTree<P>>)> {
+        let pos = self.text_pos(name)?;
+        Ok((&self.meta.text_indexes[pos], &self.text_trees[pos]))
+    }
+
+    /// Hydrate `(doc_id → score)` into scored documents.
+    fn materialise_hits(
+        &self,
+        txn: &Transaction<'_, P>,
+        scores: std::collections::BTreeMap<u64, f64>,
+        top_k: usize,
+    ) -> ndb_common::Result<Vec<TextHit>> {
+        let mut ranked: Vec<(u64, f64)> = scores.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        ranked.truncate(top_k);
+        let mut out = Vec::with_capacity(ranked.len());
+        for (id, score) in ranked {
+            if let Some(doc) = self.get(txn, DocumentId::new(id))? {
+                out.push(TextHit {
+                    doc_id: DocumentId::new(id),
+                    doc,
+                    score,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Index one document into `tree` at `meta.text_indexes[pos]`.
+    fn index_one_text(
+        &mut self,
+        txn: &mut Transaction<'_, P>,
+        tree: &Arc<BTree<P>>,
+        pos: usize,
+        doc: &Document,
+    ) -> ndb_common::Result<()> {
+        let field_texts = self.analyze_for_index(pos, doc)?;
+        if field_texts.is_empty() {
+            return Ok(());
+        }
+        InvertedIndex::index_document(txn, self.docstore.pool(), tree, doc.id.get(), &field_texts)
+    }
+
+    /// Analyses `doc`'s fields per `text_indexes[pos]` — shared by the
+    /// index and remove paths so they agree on the term set.
+    fn analyze_for_index(
+        &mut self,
+        pos: usize,
+        doc: &Document,
+    ) -> ndb_common::Result<Vec<FieldText>> {
+        let def = self.meta.text_indexes[pos].clone();
+        let mut field_texts = Vec::new();
+        for f in &def.fields {
+            let Some(fid) = self.meta.dict.id(&f.field) else {
+                continue;
+            };
+            let value = doc.get(&f.field);
+            let text = match value {
+                Some(ndb_document::Value::String(s)) => s.clone(),
+                Some(ndb_document::Value::Array(items)) => items
+                    .iter()
+                    .filter_map(|v| match v {
+                        ndb_document::Value::String(s) => Some(s.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                _ => continue, // non-text or absent field: nothing indexed
+            };
+            let analyzer = Analyzer::new(Analyzer::decode_cfg(&f.analyzer_cfg)?);
+            field_texts.push(FieldText {
+                field_id: fid.get() as u16,
+                tokens: analyzer.analyze(&text),
+            });
+        }
+        Ok(field_texts)
+    }
+
+    /// Writes this document's postings into every text index.
+    fn index_text_fields(
+        &mut self,
+        txn: &mut Transaction<'_, P>,
+        doc: &Document,
+    ) -> ndb_common::Result<()> {
+        for pos in 0..self.meta.text_indexes.len() {
+            let tree = Arc::clone(&self.text_trees[pos]);
+            self.index_one_text(txn, &tree, pos, doc)?;
+        }
+        Ok(())
+    }
+
+    /// Physically removes this doc's postings from every text index —
+    /// re-analysing the old document with each index's analyzers gives the
+    /// term set to strip (§9.4; stragglers from analyzer-version skew are
+    /// cleaned by `compact_text_index`).
+    fn remove_text_entries(
+        &mut self,
+        txn: &mut Transaction<'_, P>,
+        old: &Document,
+    ) -> ndb_common::Result<()> {
+        for pos in 0..self.meta.text_indexes.len() {
+            let tree = Arc::clone(&self.text_trees[pos]);
+            let Some(stats) = InvertedIndex::doc_stats(txn, &tree, old.id.get())? else {
+                continue;
+            };
+            let field_texts = self.analyze_for_index(pos, old)?;
+            InvertedIndex::remove_document(
+                txn,
+                self.docstore.pool(),
+                &tree,
+                old.id.get(),
+                &field_texts,
+                &stats,
+            )?;
         }
         Ok(())
     }

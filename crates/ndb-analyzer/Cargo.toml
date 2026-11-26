@@ -1,0 +1,8 @@
+[package]
+name = "ndb-analyzer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ndb-common = { path = "../ndb-common" }
+ndb-tokenizer = { path = "../ndb-tokenizer" }

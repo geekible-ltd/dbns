@@ -14,6 +14,7 @@
 //! u16 coll_name_len | coll_name
 //! ```
 
+use ndb_analyzer::Analyzer;
 use ndb_common::error::Error;
 use ndb_common::ids::{CollectionId, PageId};
 use ndb_document::{DataType, FieldDictionary, Schema};
@@ -31,6 +32,28 @@ pub struct IndexDef {
     pub root: PageId,
 }
 
+/// One analysed field inside a text index — per-field weight (spec §9.3)
+/// plus the versioned analyser config (§9.2: changing it forces a rebuild,
+/// never a silent mix of tokenisation rules).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextFieldDef {
+    pub field: String,
+    pub weight: f64,
+    /// Encoded `AnalyzerConfig` (versioned).
+    pub analyzer_cfg: Vec<u8>,
+    /// Analyzer config version pinned at index-create time.
+    pub analyzer_version: u32,
+}
+
+/// A full-text index definition (spec §9.1): a dedicated tree of term
+/// postings over one or more weighted text fields.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextIndexDef {
+    pub name: String,
+    pub fields: Vec<TextFieldDef>,
+    pub root: PageId,
+}
+
 /// Everything needed to open a collection — persisted as one catalog value.
 #[derive(Debug, Clone)]
 pub struct CollectionMeta {
@@ -43,6 +66,8 @@ pub struct CollectionMeta {
     pub dict: FieldDictionary,
     pub schema: Schema,
     pub indexes: Vec<IndexDef>,
+    /// Full-text indexes (spec §9.1).
+    pub text_indexes: Vec<TextIndexDef>,
 }
 
 impl CollectionMeta {
@@ -94,6 +119,22 @@ impl CollectionMeta {
         out.extend_from_slice(self.database.as_bytes());
         put_u16(&mut out, self.name.len() as u16);
         out.extend_from_slice(self.name.as_bytes());
+        // text indexes (appended — older decoders stop at `name`)
+        put_u16(&mut out, self.text_indexes.len() as u16);
+        for t in &self.text_indexes {
+            put_u16(&mut out, t.name.len() as u16);
+            out.extend_from_slice(t.name.as_bytes());
+            put_u64(&mut out, t.root.get());
+            put_u16(&mut out, t.fields.len() as u16);
+            for f in &t.fields {
+                put_u16(&mut out, f.field.len() as u16);
+                out.extend_from_slice(f.field.as_bytes());
+                put_u64(&mut out, f.weight.to_bits());
+                put_u32(&mut out, f.analyzer_version);
+                put_u32(&mut out, f.analyzer_cfg.len() as u32);
+                out.extend_from_slice(&f.analyzer_cfg);
+            }
+        }
         out
     }
 
@@ -162,6 +203,42 @@ impl CollectionMeta {
         let clen = r.u16()? as usize;
         let name = String::from_utf8(r.bytes(clen)?.to_vec())
             .map_err(|_| Error::Corruption("meta: bad utf8 coll name".into()))?;
+        // Text indexes are a trailing extension — absent in older metas.
+        let mut text_indexes = Vec::new();
+        if r.pos < buf.len() {
+            let n = r.u16()? as usize;
+            for _ in 0..n {
+                let nlen = r.u16()? as usize;
+                let tname = String::from_utf8(r.bytes(nlen)?.to_vec())
+                    .map_err(|_| Error::Corruption("meta: bad utf8 text idx name".into()))?;
+                let root = PageId::new(r.u64()?);
+                let nf = r.u16()? as usize;
+                let mut fields = Vec::with_capacity(nf);
+                for _ in 0..nf {
+                    let flen = r.u16()? as usize;
+                    let field = String::from_utf8(r.bytes(flen)?.to_vec())
+                        .map_err(|_| Error::Corruption("meta: bad utf8 text field".into()))?;
+                    let weight = f64::from_bits(r.u64()?);
+                    let analyzer_version = r.u32()?;
+                    let clen = r.u32()? as usize;
+                    let analyzer_cfg = r.bytes(clen)?.to_vec();
+                    // Validate eagerly — a corrupt config must fail open, not
+                    // surface mid-search.
+                    Analyzer::decode_cfg(&analyzer_cfg)?;
+                    fields.push(TextFieldDef {
+                        field,
+                        weight,
+                        analyzer_cfg,
+                        analyzer_version,
+                    });
+                }
+                text_indexes.push(TextIndexDef {
+                    name: tname,
+                    fields,
+                    root,
+                });
+            }
+        }
         r.expect_end()?;
         Ok(CollectionMeta {
             id,
@@ -172,6 +249,7 @@ impl CollectionMeta {
             dict,
             schema,
             indexes,
+            text_indexes,
         })
     }
 }

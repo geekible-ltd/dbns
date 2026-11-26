@@ -9,7 +9,23 @@ architectural decisions. This file is a working summary, not a replacement.
 
 ## Current state
 
-Phase 4 in progress (see `docs/progress.md`):
+Phase 5 complete — full-text search (see `docs/progress.md`):
+- `ndb-tokenizer` — Unicode word-split, positions + byte offsets, `'s`
+  possessive strip.
+- `ndb-analyzer` — versioned per-field pipeline (accent-fold, case-fold,
+  stop-words, Porter stem, synonyms); `AnalyzerConfig` codec.
+- `ndb-postings` — page-bounded `Chunk` codec: delta+varint docids/tf/
+  positions, block-max tf + last-doc headers.
+- `ndb-inverted` — per-index B+Tree (T/S/MN/MF/D keys), copy-on-write tail
+  chunks, term dictionary, doc stats, physical removal + `compact()`,
+  `query` module (Term/Match/Phrase search).
+- `ndb-bm25` — k1/b + field weights, `Scorer` trait impl.
+- `ndb-fuzzy` — bounded Levenshtein dictionary expansion with caps.
+- `ndb-index` — `TextIndexDef`/`TextFieldDef` meta, `create_text_index`,
+  `search_text`/`search_phrase`/`search_fuzzy`, `compact_text_index`,
+  `rebuild_text_index`; synchronous in-txn index maintenance. ADR-011/012.
+
+Phase 4 (see `docs/progress.md`):
 - `ndb-index` — `Engine` (system catalog B+Tree: `db:`/`coll:` keys),
   `Collection` CRUD + schema validation + auto-saved meta, `DocStore`
   (inline or Doc-page-chained record blobs), secondary indexes

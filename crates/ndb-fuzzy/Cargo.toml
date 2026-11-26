@@ -1,0 +1,11 @@
+[package]
+name = "ndb-fuzzy"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ndb-common = { path = "../ndb-common" }
+ndb-btree = { path = "../ndb-btree" }
+ndb-page = { path = "../ndb-page" }
+ndb-transaction = { path = "../ndb-transaction" }
+ndb-inverted = { path = "../ndb-inverted" }
