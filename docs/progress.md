@@ -70,10 +70,13 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       ownership, inline GC at commit horizon (spec §5.7, ADR-007)
 - [x] Checkpointing + WAL retirement (spec §5.6)
 - [x] Crash recovery: undo uncommitted before-images, redo committed
-      after-images; tests cover kill-before-flush and crash-during-checkpoint
-      boundaries (spec §22.3)
-- [~] Remaining §22.3 boundaries (kill during WAL append / page write),
-      torn-commit atomicity on commit_inner failure
+      after-images (spec §22.3)
+- [x] Kill-boundary coverage (§22.3): torn WAL tail truncated on scan,
+      kill after-append-before-Commit undoes images, torn data pages rebuilt
+      by redo, kill-before-flush, crash-during-checkpoint
+- [x] Torn-commit atomicity: failed commit restores pre-commit chains,
+      drops uncommitted heads, records Abort — seq reuse can't surface
+      phantom versions (ADR-007)
 
 ### Phase 4 — Database functionality
 - [ ] Database/collection managers (spec §2.1)

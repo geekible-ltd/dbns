@@ -319,3 +319,128 @@ fn snapshot_pins_version_across_update_commit() {
     let snap2 = db.mgr.begin().unwrap();
     assert_eq!(snap2.get(&key(46)).unwrap(), Some(val(1046)));
 }
+
+// ── spec §22.3: remaining kill boundaries ────────────────────────────────
+
+/// Kill while appending to the WAL: a torn partial record at the tail is
+/// detected by CRC framing and truncated during the recovery scan.
+#[test]
+fn torn_wal_tail_is_truncated_on_recovery() {
+    let (db, _t) = create_db();
+    let mut t = db.mgr.begin_write().unwrap();
+    for i in 0..20 {
+        t.insert(&key(i), &val(i)).unwrap();
+    }
+    t.commit().unwrap();
+
+    // Append garbage to the tail segment — a crashed mid-append write.
+    let segs: Vec<_> = std::fs::read_dir(&db.wal_dir)
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "ndbwal"))
+        .collect();
+    assert!(!segs.is_empty());
+    let tail = segs.iter().max().unwrap();
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().append(true).open(tail).unwrap();
+    f.write_all(&[0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01, 0x42])
+        .unwrap();
+
+    let db = crash_and_restart(db);
+    let snap = db.mgr.begin().unwrap();
+    for i in 0..20 {
+        assert_eq!(snap.get(&key(i)).unwrap(), Some(val(i)));
+    }
+}
+
+/// Kill after WAL appends but before the Commit record: the txn's page
+/// images exist in the WAL but it never committed — undo must restore the
+/// before-images. `mem::forget` skips the auto-rollback drop path entirely.
+#[test]
+fn kill_after_wal_append_before_commit_record() {
+    let (db, _t) = create_db();
+    let mut t0 = db.mgr.begin_write().unwrap();
+    t0.insert(&key(1), &val(1)).unwrap();
+    t0.commit().unwrap();
+
+    let mut t1 = db.mgr.begin_write().unwrap();
+    t1.insert(&key(1), &val(999)).unwrap();
+    t1.insert(&key(2), &val(2)).unwrap();
+    std::mem::forget(t1); // process dies: images journaled, no Commit/Abort
+
+    let db = crash_and_restart(db);
+    let snap = db.mgr.begin().unwrap();
+    assert_eq!(snap.get(&key(1)).unwrap(), Some(val(1))); // not 999
+    assert_eq!(snap.get(&key(2)).unwrap(), None);
+}
+
+/// Kill while writing data pages: the file below the meta page is torn
+/// garbage. Recovery never reads data pages — committed after-images are
+/// written wholesale, so torn pages are rebuilt.
+#[test]
+fn torn_data_pages_are_overwritten_by_redo() {
+    let (db, _t) = create_db();
+    let mut t = db.mgr.begin_write().unwrap();
+    for i in 0..30 {
+        t.insert(&key(i), &val(i)).unwrap();
+    }
+    t.commit().unwrap();
+
+    // Torn file: scribble over everything above page 0 (PageManager::open
+    // reads only the meta page). No checkpoint ran, so the WAL covers every
+    // page redo needs.
+    {
+        let mut d = db.data.data.lock().unwrap();
+        let start = PAGE_SIZE as usize;
+        let end = d.len();
+        for b in d[start..end].iter_mut() {
+            *b = 0xAA;
+        }
+    }
+
+    let db = crash_and_restart(db);
+    let snap = db.mgr.begin().unwrap();
+    for i in 0..30 {
+        assert_eq!(snap.get(&key(i)).unwrap(), Some(val(i)));
+    }
+}
+
+/// Torn commit (ADR-007): a failure mid-commit must not leave stamped
+/// versions that a later reuse of the same commit sequence would expose.
+/// Fault is injected via the journal's error latch — `commit` returns the
+/// error and the transaction aborts completely.
+#[test]
+fn failed_commit_leaves_no_phantom_versions() {
+    use ndb_common::error::Error;
+    let (db, _t) = create_db();
+    let mut t0 = db.mgr.begin_write().unwrap();
+    t0.insert(&key(1), &val(1)).unwrap();
+    t0.insert(&key(2), &val(2)).unwrap();
+    t0.commit().unwrap(); // seq 1
+
+    let snap = db.mgr.begin().unwrap(); // snapshot at seq 1
+
+    // Writer commits but the WAL reports an error after stamping.
+    let mut t1 = db.mgr.begin_write().unwrap();
+    t1.insert(&key(1), &val(100)).unwrap();
+    t1.insert(&key(3), &val(3)).unwrap();
+    db.mgr
+        .journal()
+        .inject_error(Error::Storage("injected wal failure".into()));
+    assert!(t1.commit().is_err());
+
+    // The failed txn is fully aborted: pre-commit values, no uncommitted head.
+    assert_eq!(snap.get(&key(1)).unwrap(), Some(val(1)));
+    assert_eq!(snap.get(&key(3)).unwrap(), None);
+
+    // The next commit reuses seq 2 — it must not resurrect t1's stamps.
+    let mut t2 = db.mgr.begin_write().unwrap();
+    t2.insert(&key(9), &val(9)).unwrap();
+    t2.commit().unwrap();
+
+    let snap2 = db.mgr.begin().unwrap();
+    assert_eq!(snap2.get(&key(1)).unwrap(), Some(val(1))); // not 100
+    assert_eq!(snap2.get(&key(3)).unwrap(), None);
+    assert_eq!(snap2.get(&key(9)).unwrap(), Some(val(9)));
+    assert!(db.mgr.btree().validate().is_ok());
+}

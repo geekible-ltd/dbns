@@ -268,6 +268,11 @@ impl<P: PageIo> TxnManager<P> {
     pub fn wal(&self) -> &Arc<Wal> {
         &self.wal
     }
+
+    /// The journal — exposed for fault injection in tests (spec §22.3).
+    pub fn journal(&self) -> &Arc<Journal> {
+        &self.journal
+    }
 }
 
 /// An active transaction. Dropping a live *write* transaction rolls it
@@ -398,24 +403,72 @@ impl<'m, P: PageIo> Transaction<'m, P> {
                 &snaps,
                 self.mgr.commit_seq.load(Ordering::SeqCst),
             );
-            for key in std::mem::take(&mut self.write_set) {
-                let mut vv = self.read_vv(&key)?;
-                vv.stamp_commit(self.id, seq);
-                let dead = vv.gc(horizon);
-                if dead || vv.0.is_empty() {
-                    self.mgr.btree.delete(&key)?;
-                } else {
-                    self.mgr.btree.insert(&key, &vv.encode())?;
+            // Keep each key's pre-commit chain so a failure mid-way can be
+            // compensated — stamped versions must never surface under a
+            // later reuse of `seq` (ADR-007, torn commit).
+            let mut originals: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+            let mut stamp_err = None;
+            for key in &self.write_set {
+                let step = self.read_vv(key).and_then(|mut vv| {
+                    originals.push((key.clone(), vv.encode()));
+                    vv.stamp_commit(self.id, seq);
+                    let dead = vv.gc(horizon);
+                    if dead || vv.0.is_empty() {
+                        self.mgr.btree.delete(key).map(|_| ())
+                    } else {
+                        self.mgr.btree.insert(key, &vv.encode())
+                    }
+                });
+                if let Err(e) = step {
+                    stamp_err = Some(e);
+                    break;
                 }
             }
-            self.mgr.write_catalog(seq)?;
-            self.mgr.journal.check_err()?;
-            self.mgr.wal.append(self.id, WalRecord::Commit)?;
-            self.mgr.wal.flush()?;
-            // Durable: make the commit visible to new snapshots.
-            self.mgr.commit_seq.store(seq, Ordering::SeqCst);
+            let result = match stamp_err {
+                Some(e) => Err(e),
+                None => self
+                    .mgr
+                    .write_catalog(seq)
+                    .and_then(|_| self.mgr.journal.check_err())
+                    .and_then(|_| self.mgr.wal.append(self.id, WalRecord::Commit).map(|_| ()))
+                    .and_then(|_| self.mgr.wal.flush().map(|_| ())),
+            };
+            match result {
+                Ok(()) => {
+                    // Durable: make the commit visible to new snapshots.
+                    self.mgr.commit_seq.store(seq, Ordering::SeqCst);
+                }
+                Err(e) => {
+                    self.compensate_failed_commit(&originals);
+                    return Err(e);
+                }
+            }
         }
         Ok(())
+    }
+
+    /// Torn-commit compensation (ADR-007): `commit_inner` failed after some
+    /// chains were already stamped/GC'd. Restore every written key's
+    /// pre-commit chain (uncommitted head + full version history), drop the
+    /// uncommitted heads so the txn aborts like a plain rollback, and record
+    /// the abort. Best-effort: the journaled before-images let crash
+    /// recovery reach the same pre-txn state if a restore itself fails.
+    fn compensate_failed_commit(&mut self, originals: &[(Vec<u8>, Vec<u8>)]) {
+        for (key, enc) in originals {
+            let _ = self.mgr.btree.insert(key, enc);
+        }
+        for key in &self.write_set {
+            if let Ok(mut vv) = self.read_vv(key) {
+                vv.remove_uncommitted(self.id);
+                let _ = if vv.0.is_empty() {
+                    self.mgr.btree.delete(key).map(|_| ())
+                } else {
+                    self.mgr.btree.insert(key, &vv.encode())
+                };
+            }
+        }
+        let _ = self.mgr.wal.append(self.id, WalRecord::Abort);
+        let _ = self.mgr.wal.flush();
     }
 
     fn rollback_inner(&mut self) -> ndb_common::Result<()> {

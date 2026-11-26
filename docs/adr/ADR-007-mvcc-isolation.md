@@ -52,6 +52,8 @@ store — txn semantics belong in `ndb-transaction`.
   timeouts bound this but a stuck writer still blocks all writers.
 - Single-writer throughput is a ceiling until lock-free/finer-grained write
   concurrency lands (spec §28 already defers this).
-- `commit` failure mid-stamp can leave a torn commit (some chains stamped,
-  some retaining the uncommitted head). Uncommitted remnants stay invisible
-  and are cleaned on rollback/retry; full commit atomicity is deferred.
+- `commit` failure mid-stamp is compensated: pre-commit chains (kept in
+  memory) are restored, uncommitted heads dropped, and an `Abort` record is
+  appended — stamped versions can never surface under a later reuse of the
+  commit sequence. Compensation is best-effort; the journaled before-images
+  let crash recovery reach the same pre-txn state if a restore itself fails.

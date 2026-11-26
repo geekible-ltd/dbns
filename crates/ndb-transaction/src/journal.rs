@@ -81,4 +81,12 @@ impl Journal {
             None => Ok(()),
         }
     }
+
+    /// Test hook (spec §22.3 fault injection): latches `e` so the next
+    /// `check_err` fails — exercises the torn-commit compensation path
+    /// without needing a fault-injecting filesystem.
+    #[doc(hidden)]
+    pub fn inject_error(&self, e: Error) {
+        self.state.lock().unwrap().err = Some(e);
+    }
 }
