@@ -9,6 +9,10 @@
 //! - `Str`/`Bytes`: tag `0x30`/`0x40` + bytes with `0x00` escaped as
 //!   `0x00 0xFF`, terminated by `0x00 0x00` — prefix-free, so shorter values
 //!   sort first.
+//! - `Bool`: tag `0x50` + `0x00`/`0x01`.
+//! - `Float`: tag `0x60` + big-endian `to_bits() ^ mask` (sign bit flips all
+//!   bits for negatives, only the sign bit for non-negatives) — IEEE-754
+//!   total order is preserved byte-wise.
 //!
 //! Callers must use consistent types per position: a `UInt` in position 0
 //! must not mix with a `Str` in position 0 — tag order determines
@@ -21,12 +25,16 @@ pub enum KeyPart {
     Int(i64),
     Str(String),
     Bytes(Vec<u8>),
+    Bool(bool),
+    Float(f64),
 }
 
 const TAG_UINT: u8 = 0x10;
 const TAG_INT: u8 = 0x20;
 const TAG_STR: u8 = 0x30;
 const TAG_BYTES: u8 = 0x40;
+const TAG_BOOL: u8 = 0x50;
+const TAG_FLOAT: u8 = 0x60;
 
 /// Encodes a composite key to an order-preserving byte string.
 pub fn encode_composite(parts: &[KeyPart]) -> Vec<u8> {
@@ -48,6 +56,20 @@ pub fn encode_composite(parts: &[KeyPart]) -> Vec<u8> {
             KeyPart::Bytes(b) => {
                 out.push(TAG_BYTES);
                 encode_escaped(&mut out, b);
+            }
+            KeyPart::Bool(v) => {
+                out.push(TAG_BOOL);
+                out.push(*v as u8);
+            }
+            KeyPart::Float(v) => {
+                let bits = v.to_bits();
+                let mapped = if bits & (1 << 63) != 0 {
+                    !bits
+                } else {
+                    bits ^ (1 << 63)
+                };
+                out.push(TAG_FLOAT);
+                out.extend_from_slice(&mapped.to_be_bytes());
             }
         }
     }
@@ -107,6 +129,27 @@ mod tests {
         let mut keys = vec![mk(2, "a"), mk(1, "z"), mk(1, "a"), mk(2, "b")];
         keys.sort();
         assert_eq!(keys, vec![mk(1, "a"), mk(1, "z"), mk(2, "a"), mk(2, "b")]);
+    }
+
+    #[test]
+    fn float_ordering_includes_negatives() {
+        let vals = [0.0f64, -1.5, 3.25, -100.0, f64::MAX, f64::MIN];
+        let mut keys: Vec<(Vec<u8>, f64)> = vals
+            .iter()
+            .map(|&v| (encode_composite(&[KeyPart::Float(v)]), v))
+            .collect();
+        keys.sort_by(|a, b| a.0.cmp(&b.0));
+        let order: Vec<f64> = keys.into_iter().map(|(_, v)| v).collect();
+        let mut sorted = vals;
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(order, sorted);
+    }
+
+    #[test]
+    fn bool_ordering() {
+        assert!(
+            encode_composite(&[KeyPart::Bool(false)]) < encode_composite(&[KeyPart::Bool(true)])
+        );
     }
 
     #[test]

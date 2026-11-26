@@ -772,6 +772,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ndb-index"
+version = "0.1.0"
+dependencies = [
+ "ndb-btree",
+ "ndb-buffer",
+ "ndb-common",
+ "ndb-document",
+ "ndb-page",
+ "ndb-transaction",
+ "ndb-wal",
+ "tempfile",
+]
+
+[[package]]
 name = "ndb-page"
 version = "0.1.0"
 dependencies = [

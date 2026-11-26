@@ -79,11 +79,23 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       phantom versions (ADR-007)
 
 ### Phase 4 — Database functionality
-- [ ] Database/collection managers (spec §2.1)
-- [ ] CRUD + bulk insertion (spec §7.2)
-- [ ] Primary index (spec §8.2)
-- [ ] Secondary indexes (spec §8.3)
-- [ ] Schema validation (spec §6)
+- [x] `ndb-index` crate — `Engine` (catalog = system B+Tree; `db:`/`coll:`
+      keys), `Collection`, `DocStore` record blobs (ADR-021)
+- [x] Database manager: create/drop/list databases, implicit namespacing
+- [x] Collection manager: create/drop/list/open with auto-saved
+      `CollectionMeta` (pk/index roots, field dict, schema, id watermark)
+- [x] CRUD: insert/get/update/delete/scan via caller transactions —
+      multi-document txns atomic (spec §7.2)
+- [x] Primary index: doc_id → RecordEntry (inline ≤1KB or Doc page
+      chain — no size ceiling) (spec §8.2)
+- [x] Secondary indexes: single/composite/unique/sparse, order-preserving
+      composite keys (+Float/Bool parts), lookup + ordered range, backfill
+      + rebuild + drop (spec §8.3)
+- [x] Schema validation on write — strict/flexible modes (spec §6)
+- [x] Bulk insertion — `insert_many` in one transaction
+- [~] Partial (predicate) indexes, bitmap indexes (§8.3/§8.4) — deferred
+      to query phase; record-page reclamation on version GC deferred to
+      persisted-freelist work
 
 ### Phases 5–11 (not started)
 - [ ] Phase 5 — full-text search: tokenizer, analyser, inverted index, BM25,

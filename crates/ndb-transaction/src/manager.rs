@@ -277,12 +277,16 @@ impl<P: PageIo> TxnManager<P> {
 
 /// An active transaction. Dropping a live *write* transaction rolls it
 /// back (best-effort).
+/// A write-set entry's pre-commit chain, kept for torn-commit
+/// compensation: `(tree, key, encoded_version_chain)`.
+type WriteOriginal<P> = (Arc<BTree<P>>, Vec<u8>, Vec<u8>);
+
 pub struct Transaction<'m, P: PageIo> {
     mgr: &'m TxnManager<P>,
     id: TransactionId,
     snapshot_seq: CommitSequence,
     write_guard: Option<MutexGuard<'m, ()>>,
-    write_set: Vec<Vec<u8>>,
+    write_set: Vec<(Arc<BTree<P>>, Vec<u8>)>,
     done: bool,
     deadline: Instant,
 }
@@ -304,10 +308,16 @@ impl<'m, P: PageIo> Transaction<'m, P> {
         Ok(())
     }
 
-    /// Reads `key` resolved at this transaction's snapshot sequence.
+    /// Reads `key` in the catalog tree resolved at this transaction's
+    /// snapshot sequence.
     pub fn get(&self, key: &[u8]) -> ndb_common::Result<Option<Vec<u8>>> {
+        self.get_in(&self.mgr.btree, key)
+    }
+
+    /// Reads `key` in `tree` resolved at the snapshot sequence.
+    pub fn get_in(&self, tree: &Arc<BTree<P>>, key: &[u8]) -> ndb_common::Result<Option<Vec<u8>>> {
         self.check_live()?;
-        let raw = match self.mgr.btree.get(key)? {
+        let raw = match tree.get(key)? {
             Some(v) => v,
             None => return Ok(None),
         };
@@ -316,28 +326,67 @@ impl<'m, P: PageIo> Transaction<'m, P> {
         Ok(vv.resolve(self.id, self.snapshot_seq))
     }
 
-    /// Inserts or replaces `key` → `val` (write txns only).
+    /// Inserts or replaces `key` → `val` in the catalog tree (write txns
+    /// only).
     pub fn insert(&mut self, key: &[u8], val: &[u8]) -> ndb_common::Result<()> {
+        let tree = Arc::clone(&self.mgr.btree);
+        self.insert_in(&tree, key, val)
+    }
+
+    /// Inserts or replaces `key` → `val` in `tree` (write txns only).
+    pub fn insert_in(
+        &mut self,
+        tree: &Arc<BTree<P>>,
+        key: &[u8],
+        val: &[u8],
+    ) -> ndb_common::Result<()> {
         self.require_writer()?;
-        let mut vv = self.read_vv(key)?;
+        let mut vv = self.read_vv(tree, key)?;
         vv.write(self.id, Some(val.to_vec()));
-        self.mgr.btree.insert(key, &vv.encode())?;
+        tree.insert(key, &vv.encode())?;
         self.mgr.journal.check_err()?;
-        self.write_set.push(key.to_vec());
+        self.write_set.push((Arc::clone(tree), key.to_vec()));
         Ok(())
     }
 
-    /// Deletes `key` at this transaction's snapshot (write txns only).
+    /// Deletes `key` from the catalog tree at this transaction's snapshot
+    /// (write txns only).
     pub fn delete(&mut self, key: &[u8]) -> ndb_common::Result<bool> {
+        let tree = Arc::clone(&self.mgr.btree);
+        self.delete_in(&tree, key)
+    }
+
+    /// Versioned full scan of the catalog tree: each entry resolved at the
+    /// snapshot sequence; unresolvable (tombstoned/absent) keys are skipped.
+    pub fn scan(&self) -> ndb_common::Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        self.scan_in(&self.mgr.btree)
+    }
+
+    /// Versioned full scan of `tree`. Materializes the whole tree —
+    /// suitable for catalog/index scans; a lazy cursor API comes later.
+    pub fn scan_in(&self, tree: &Arc<BTree<P>>) -> ndb_common::Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        self.check_live()?;
+        let mut out = Vec::new();
+        for (k, raw) in tree.scan()? {
+            let vv = VersionedValue::decode(&raw)?;
+            if let Some(data) = vv.resolve(self.id, self.snapshot_seq) {
+                out.push((k, data));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Deletes `key` from `tree` at the snapshot (write txns only).
+    pub fn delete_in(&mut self, tree: &Arc<BTree<P>>, key: &[u8]) -> ndb_common::Result<bool> {
         self.require_writer()?;
-        let mut vv = self.read_vv(key)?;
+        let mut vv = self.read_vv(tree, key)?;
         if vv.resolve(self.id, self.snapshot_seq).is_none() {
             return Ok(false);
         }
         vv.write(self.id, None); // tombstone
-        self.mgr.btree.insert(key, &vv.encode())?;
+        tree.insert(key, &vv.encode())?;
         self.mgr.journal.check_err()?;
-        self.write_set.push(key.to_vec());
+        self.write_set.push((Arc::clone(tree), key.to_vec()));
         Ok(true)
     }
 
@@ -348,9 +397,9 @@ impl<'m, P: PageIo> Transaction<'m, P> {
         self.check_live()
     }
 
-    /// Raw unresolved version chain for `key` (empty when absent).
-    fn read_vv(&self, key: &[u8]) -> ndb_common::Result<VersionedValue> {
-        match self.mgr.btree.get(key)? {
+    /// Raw unresolved version chain for `key` in `tree` (empty when absent).
+    fn read_vv(&self, tree: &Arc<BTree<P>>, key: &[u8]) -> ndb_common::Result<VersionedValue> {
+        match tree.get(key)? {
             Some(raw) => VersionedValue::decode(&raw),
             None => Ok(VersionedValue::default()),
         }
@@ -406,17 +455,17 @@ impl<'m, P: PageIo> Transaction<'m, P> {
             // Keep each key's pre-commit chain so a failure mid-way can be
             // compensated — stamped versions must never surface under a
             // later reuse of `seq` (ADR-007, torn commit).
-            let mut originals: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+            let mut originals: Vec<WriteOriginal<P>> = Vec::new();
             let mut stamp_err = None;
-            for key in &self.write_set {
-                let step = self.read_vv(key).and_then(|mut vv| {
-                    originals.push((key.clone(), vv.encode()));
+            for (tree, key) in &self.write_set {
+                let step = self.read_vv(tree, key).and_then(|mut vv| {
+                    originals.push((Arc::clone(tree), key.clone(), vv.encode()));
                     vv.stamp_commit(self.id, seq);
                     let dead = vv.gc(horizon);
                     if dead || vv.0.is_empty() {
-                        self.mgr.btree.delete(key).map(|_| ())
+                        tree.delete(key).map(|_| ())
                     } else {
-                        self.mgr.btree.insert(key, &vv.encode())
+                        tree.insert(key, &vv.encode())
                     }
                 });
                 if let Err(e) = step {
@@ -453,17 +502,17 @@ impl<'m, P: PageIo> Transaction<'m, P> {
     /// uncommitted heads so the txn aborts like a plain rollback, and record
     /// the abort. Best-effort: the journaled before-images let crash
     /// recovery reach the same pre-txn state if a restore itself fails.
-    fn compensate_failed_commit(&mut self, originals: &[(Vec<u8>, Vec<u8>)]) {
-        for (key, enc) in originals {
-            let _ = self.mgr.btree.insert(key, enc);
+    fn compensate_failed_commit(&mut self, originals: &[WriteOriginal<P>]) {
+        for (tree, key, enc) in originals {
+            let _ = tree.insert(key, enc);
         }
-        for key in &self.write_set {
-            if let Ok(mut vv) = self.read_vv(key) {
+        for (tree, key) in &self.write_set {
+            if let Ok(mut vv) = self.read_vv(tree, key) {
                 vv.remove_uncommitted(self.id);
                 let _ = if vv.0.is_empty() {
-                    self.mgr.btree.delete(key).map(|_| ())
+                    tree.delete(key).map(|_| ())
                 } else {
-                    self.mgr.btree.insert(key, &vv.encode())
+                    tree.insert(key, &vv.encode())
                 };
             }
         }
@@ -474,13 +523,13 @@ impl<'m, P: PageIo> Transaction<'m, P> {
     fn rollback_inner(&mut self) -> ndb_common::Result<()> {
         // Logical undo: remove this txn's uncommitted version from every
         // touched key; delete keys left with no versions at all.
-        for key in std::mem::take(&mut self.write_set) {
-            let mut vv = self.read_vv(&key)?;
+        for (tree, key) in std::mem::take(&mut self.write_set) {
+            let mut vv = self.read_vv(&tree, &key)?;
             vv.remove_uncommitted(self.id);
             if vv.0.is_empty() {
-                self.mgr.btree.delete(&key)?;
+                tree.delete(&key)?;
             } else {
-                self.mgr.btree.insert(&key, &vv.encode())?;
+                tree.insert(&key, &vv.encode())?;
             }
         }
         self.mgr.journal.check_err()?;

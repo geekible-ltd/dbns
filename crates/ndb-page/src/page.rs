@@ -59,6 +59,8 @@ pub enum PageType {
     BTreeLeaf = 4,
     /// Overflow storage for values larger than one page.
     Overflow = 5,
+    /// Document record blob (continuation chain for large documents).
+    Doc = 6,
 }
 
 impl PageType {
@@ -70,6 +72,7 @@ impl PageType {
             3 => Self::BTreeInternal,
             4 => Self::BTreeLeaf,
             5 => Self::Overflow,
+            6 => Self::Doc,
             _ => return None,
         })
     }

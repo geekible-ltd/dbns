@@ -31,3 +31,4 @@ The spec (§28) pre-allocates this list — add new ADRs beyond ADR-020 as neede
 | ADR-018 | Multi-tenancy and RBAC | proposed |
 | ADR-019 | Encryption and key management | proposed |
 | ADR-020 | Cross-platform storage abstraction | proposed |
+| ADR-021 | System catalog, collection metadata and index layout | accepted |

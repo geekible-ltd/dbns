@@ -1,0 +1,16 @@
+[package]
+name = "ndb-index"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ndb-common = { path = "../ndb-common" }
+ndb-document = { path = "../ndb-document" }
+ndb-page = { path = "../ndb-page" }
+ndb-buffer = { path = "../ndb-buffer" }
+ndb-btree = { path = "../ndb-btree" }
+ndb-transaction = { path = "../ndb-transaction" }
+ndb-wal = { path = "../ndb-wal" }
+
+[dev-dependencies]
+tempfile.workspace = true

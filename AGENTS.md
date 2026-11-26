@@ -9,7 +9,11 @@ architectural decisions. This file is a working summary, not a replacement.
 
 ## Current state
 
-Phase 3 in progress (see `docs/progress.md`):
+Phase 4 in progress (see `docs/progress.md`):
+- `ndb-index` — `Engine` (system catalog B+Tree: `db:`/`coll:` keys),
+  `Collection` CRUD + schema validation + auto-saved meta, `DocStore`
+  (inline or Doc-page-chained record blobs), secondary indexes
+  (composite/unique/sparse, ordered ranges), `insert_many`. ADR-021.
 - `ndb-wal` — segmented append-only log, len+CRC32 framing, torn-tail
   truncation, rotation + retirement, recovery scanner. ADR-006.
 - `ndb-buffer` — plus page-journaling hook + WAL flush gate (ADR-006).
