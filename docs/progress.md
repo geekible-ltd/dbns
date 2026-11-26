@@ -79,7 +79,9 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 - [ ] Phase 6 — query engine: parser, AST, planner, optimiser, aggregation,
       EXPLAIN (spec §12–13)
 - [ ] Phase 7 — vector + hybrid: vector storage, HNSW, RRF (spec §10–11)
-- [ ] Phase 8 — REST + gRPC + Rust SDK (spec §15–16)
+- [ ] Phase 8 — REST + gRPC + Rust SDK + management web UI (spec §15–16;
+      UI: React/TypeScript SPA in `ui/`, separate frontend app, consumes the
+      public REST API incl. §15.7 admin endpoints; RBAC integration per §15.8)
 - [ ] Phase 9 — distribution: Raft, sharding, failover, distributed query
       (spec §4, §14)
 - [ ] Phase 10 — security: multi-tenancy, RBAC, TLS, encryption, audit

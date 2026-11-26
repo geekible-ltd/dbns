@@ -5,3 +5,8 @@ edition.workspace = true
 
 [dependencies]
 ndb-common.workspace = true
+ndb-page = { path = "../ndb-page" }
+crc32fast.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

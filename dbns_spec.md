@@ -174,6 +174,7 @@ Audit logging.
 Backup and restore.
 Monitoring.
 Administrative APIs.
+Management web UI.
 2.2 Out of scope for initial releases
 The following should not be included in the first implementation:
 
@@ -1221,6 +1222,62 @@ Membership management.
 Rebalancing status.
 Administrative endpoints must require elevated permissions.
 
+15.7 Admin endpoints
+The REST API must provide administration endpoints supporting the
+management UI and operators:
+
+Metrics snapshot in JSON, covering the §24 metric families.
+Effective configuration view, with secrets and keys redacted.
+Storage statistics: buffer-pool occupancy and eviction counters, WAL
+segment status and oldest required LSN, last completed checkpoint, and
+page-allocation statistics.
+Transaction status: active transaction count, oldest open snapshot and
+its age, and the version-retention horizon.
+Build, version and feature information.
+Health and readiness probes suitable for orchestration.
+Administrative endpoints must require elevated permissions and must be
+audit-logged (§17.5).
+
+15.8 Management web UI
+The system includes a web-based management interface implemented as a
+React/TypeScript single-page application.
+
+Delivery.
+
+The UI is a separate frontend application in the repository's ui/
+directory, built with the JavaScript toolchain (npm) and deployed as
+static assets alongside or separately from the server; it is not
+embedded in the server binary and is not a Rust crate.
+
+The UI must consume only the public REST API (§15), including the admin
+endpoints (§15.7). It must not use internal interfaces that an external
+operator could not reach.
+
+Functionality.
+
+Cluster and node health: node status, shard and replica placement, Raft
+leadership, replication lag, rebalancing progress and failover events.
+
+Data browsing and queries: browse databases, collections and documents;
+a query console for running queries and aggregation pipelines; result
+inspection including EXPLAIN output.
+
+Index and schema administration: list, create, drop and rebuild indexes;
+view collection schemas and field dictionaries.
+
+Metrics dashboards: charts over the §24 metric families — latency
+percentiles, throughput, WAL, buffer pool, checkpointing, search
+indexing — plus administrative overviews.
+
+Security.
+
+The management UI must integrate with authentication and RBAC
+(§17.2–17.3): a login flow, permission-aware navigation, and no
+privileges beyond the authenticated principal. Until Phase 10 lands, the
+UI operates for local and development use under the cluster's
+open-access defaults, and the spec's security requirements apply in
+full once RBAC exists.
+
 16. gRPC API
 Implement gRPC using Tonic and Protocol Buffers.
 
@@ -1372,6 +1429,7 @@ ndb/
 │   └── ndb-admin/
 │
 ├── proto/
+├── ui/            # React/TypeScript management UI (§15.8) — not a Rust crate
 ├── tests/
 ├── benchmarks/
 ├── examples/
@@ -2020,9 +2078,10 @@ Estimated duration: 4–6 weeks
 
 Deliverables:
 
-REST API.
+REST API (including §15.7 admin endpoints).
 gRPC API.
 Rust SDK.
+Management web UI (§15.8).
 Authentication middleware.
 Bulk operations.
 Streaming.
@@ -2032,6 +2091,7 @@ Acceptance:
 Integration tests.
 API compatibility tests.
 Client SDK examples.
+Management UI builds and passes smoke checks against the REST API.
 Phase 9 — Distributed database
 Estimated duration: 12–18 weeks
 

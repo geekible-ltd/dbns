@@ -35,3 +35,4 @@ crc32fast = "1"
 
 # Testing
 proptest = "1"
+tempfile = "3"
