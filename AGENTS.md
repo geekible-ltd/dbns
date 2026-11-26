@@ -9,6 +9,20 @@ architectural decisions. This file is a working summary, not a replacement.
 
 ## Current state
 
+Phase 8 complete — API surface (see `docs/progress.md`, ADR-017):
+- `ndb-rest` (axum): `/api/v1` — db/collection/document CRUD + bulk,
+  find/aggregate, text/vector/hybrid search, index admin, EXPLAIN,
+  admin/{metrics,storage,txn,info,config}; auth middleware; health/metrics
+  outside the versioned nest.
+- `ndb-grpc` (tonic+prost): versioned protos, all services incl.
+  client-streaming `bulk_insert` applied in one write txn.
+- `ndb-client`: Rust SDK over REST. `ndb-server`: engine bootstrap +
+  both listeners + periodic checkpoint + ctrl-c.
+- `ui/` — Vite + React + TS SPA (public REST only, §15.8);
+  `npm run build` clean.
+- Shared `IdAlloc` in `Engine` — per-request `Collection` handles share
+  the doc-id cursor; empty `filter:{}` = match-all.
+
 Phase 7 complete — vector + hybrid search (see `docs/progress.md`):
 - `ndb-vector` — cosine/dot/euclidean metrics; `EncodedVector` codec
   (f32 reference + f16/int8 quantisation groundwork).

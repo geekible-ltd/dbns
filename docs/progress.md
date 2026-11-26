@@ -151,10 +151,29 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 - [~] Physical edge unlinking + graph compaction (tombstones accumulate),
       predicate push-down into the graph walk, packed-slab vector layout
 
-### Phases 8–11 (not started)
-- [ ] Phase 8 — REST + gRPC + Rust SDK + management web UI (spec §15–16;
-      UI: React/TypeScript SPA in `ui/`, separate frontend app, consumes the
-      public REST API incl. §15.7 admin endpoints; RBAC integration per §15.8)
+### Phase 8 — API surface (complete)
+- [x] `ndb-rest` (axum): `/api/v1` — databases/collections CRUD, document
+      CRUD + bulk, find/aggregate, text/vector/hybrid search, index admin +
+      validate, EXPLAIN, admin/{metrics,storage,txn,info,config}, auth
+      middleware w/ role check; health+metrics outside the versioned nest
+- [x] `ndb-grpc` (tonic+prost): versioned `proto/ndb/v1` — Database,
+      Collection, Document (incl. client-streaming `bulk_insert` in one
+      txn), Search, Index, Administration, Cluster, Transaction services
+- [x] `ndb-client`: Rust SDK over REST (reqwest)
+- [x] `ndb-server`: boots engine (StorageFile→PageManager→BufferPool→WAL
+      recover→Engine create/open), REST+gRPC listeners, periodic
+      checkpoint task, ctrl-c shutdown; verified end-to-end (create db/
+      coll, insert, query → IndexScan, explain, WAL redo on restart)
+- [x] `ui/` React/TS SPA (Vite): overview, data browser, query console,
+      index admin, admin panels — public REST API only (§15.8);
+      `npm run build` clean
+- [x] Shared doc-id allocator in Engine — per-request Collection handles
+      no longer reset the id watermark per insert
+- [x] Empty `filter:{}` = match-all (was an error)
+- [~] TLS termination (§16.4), API keys/RBAC (Phase 10), gRPC reflection,
+      streaming query results, SDK retry/pooling config
+
+### Phases 9–11 (not started)
 - [ ] Phase 9 — distribution: Raft, sharding, failover, distributed query
       (spec §4, §14)
 - [ ] Phase 10 — security: multi-tenancy, RBAC, TLS, encryption, audit

@@ -232,6 +232,16 @@ impl<P: PageIo> TxnManager<P> {
     /// Age of the oldest open snapshot (spec §5.7 — monitoring old
     /// snapshots), or `None`. The earliest deadline belongs to the
     /// longest-running snapshot.
+    /// Current commit sequence (§15.7 txn status).
+    pub fn commit_seq(&self) -> u64 {
+        self.commit_seq.load(Ordering::SeqCst)
+    }
+
+    /// Open snapshot count — active readers + writers (§15.7).
+    pub fn active_transactions(&self) -> usize {
+        self.snapshots.lock().unwrap().len()
+    }
+
     pub fn oldest_snapshot_age(&self) -> Option<Duration> {
         let snaps = self.snapshots.lock().unwrap();
         let now = Instant::now();

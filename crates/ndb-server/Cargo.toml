@@ -4,11 +4,28 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-ndb-common.workspace = true
-ndb-config.workspace = true
-clap.workspace = true
-metrics.workspace = true
-metrics-exporter-prometheus.workspace = true
+ndb-common = { path = "../ndb-common" }
+ndb-config = { path = "../ndb-config" }
+ndb-storage = { path = "../ndb-storage" }
+ndb-page = { path = "../ndb-page" }
+ndb-buffer = { path = "../ndb-buffer" }
+ndb-btree = { path = "../ndb-btree" }
+ndb-wal = { path = "../ndb-wal" }
+ndb-transaction = { path = "../ndb-transaction" }
+ndb-index = { path = "../ndb-index" }
+ndb-rest = { path = "../ndb-rest" }
+ndb-grpc = { path = "../ndb-grpc" }
+axum.workspace = true
+tonic.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+serde_yaml.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+
+[[bin]]
+name = "ndb-server"
+path = "src/main.rs"

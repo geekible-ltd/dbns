@@ -7,4 +7,4 @@ edition.workspace = true
 ndb-common = { path = "../ndb-common" }
 ndb-document = { path = "../ndb-document" }
 ndb-query-ast = { path = "../ndb-query-ast" }
-serde_json = "1"
+serde_json.workspace = true

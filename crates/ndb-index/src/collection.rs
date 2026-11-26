@@ -25,6 +25,7 @@ use ndb_inverted::{FieldText, InvertedIndex};
 use ndb_page::manager::PageIo;
 use ndb_transaction::Transaction;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// An open collection — resolves its catalog metadata into live B+Tree
 /// handles. Cheap: metadata is small and reads happen through the pool.
@@ -46,12 +47,31 @@ pub struct Collection<P: PageIo> {
     /// The system catalog tree + this collection's key in it.
     catalog: Arc<BTree<P>>,
     catalog_key: Vec<u8>,
-    /// In-memory doc-id cursor; `meta.next_doc_id` is the persisted
-    /// watermark (ids below it are exhausted or reserved). The watermark
-    /// jumps ahead in blocks so the catalog isn't rewritten per insert —
-    /// gaps after restart are allowed.
-    id_cursor: u64,
+    /// Shared doc-id allocator (per catalog key, owned by `Engine`) —
+    /// collection handles are opened per request, so the cursor must
+    /// outlive individual handles or every fresh handle would restart at
+    /// the watermark and waste a whole reservation block.
+    ids: Arc<IdAlloc>,
     dirty: bool,
+}
+
+/// Shared monotonic doc-id allocator for a collection. `next` is the
+/// in-memory cursor; `hi` is the reserved bound mirrored to
+/// `meta.next_doc_id` a block (1024 ids) at a time so the catalog isn't
+/// rewritten per insert. Gaps after restart are allowed — `hi` is the
+/// only state that must persist (it bounds every issued id).
+pub(crate) struct IdAlloc {
+    next: AtomicU64,
+    hi: AtomicU64,
+}
+
+impl IdAlloc {
+    pub(crate) fn new(watermark: u64) -> Self {
+        Self {
+            next: AtomicU64::new(watermark),
+            hi: AtomicU64::new(watermark),
+        }
+    }
 }
 
 impl<P: PageIo> Collection<P> {
@@ -61,6 +81,7 @@ impl<P: PageIo> Collection<P> {
         pool: &Arc<ndb_buffer::BufferPool<P>>,
         catalog: &Arc<BTree<P>>,
         catalog_key: Vec<u8>,
+        ids: Arc<IdAlloc>,
     ) -> ndb_common::Result<Self> {
         let pk = Arc::new(BTree::open(Arc::clone(pool), meta.pk_root)?);
         let mut index_trees = Vec::with_capacity(meta.indexes.len());
@@ -75,7 +96,6 @@ impl<P: PageIo> Collection<P> {
         for def in meta.vector_indexes.iter() {
             vector_trees.push(Arc::new(BTree::open(Arc::clone(pool), def.root)?));
         }
-        let id_cursor = meta.next_doc_id;
         Ok(Self {
             meta,
             pk,
@@ -85,21 +105,30 @@ impl<P: PageIo> Collection<P> {
             docstore: DocStore::new(Arc::clone(pool)),
             catalog: Arc::clone(catalog),
             catalog_key,
-            id_cursor,
+            ids,
             dirty: false,
         })
     }
 
-    /// Assigns the next document id from the in-memory cursor, bumping the
+    /// Assigns the next document id from the shared cursor, bumping the
     /// persisted watermark a block ahead when the cursor reaches it.
     fn assign_id(&mut self) -> DocumentId {
-        let id = self.id_cursor;
-        self.id_cursor += 1;
-        if self.id_cursor >= self.meta.next_doc_id {
-            self.meta.next_doc_id = self.id_cursor + 1023;
-            self.dirty = true;
-        }
+        let id = self.ids.next.fetch_add(1, Ordering::Relaxed);
+        self.ensure_watermark(id + 1);
         DocumentId::new(id)
+    }
+
+    /// Reserves ids through `next_id + 1023` in the catalog watermark when
+    /// `next_id` crosses the current bound.
+    fn ensure_watermark(&mut self, next_id: u64) {
+        if next_id >= self.ids.hi.load(Ordering::Relaxed) {
+            self.ids.hi.fetch_max(next_id + 1023, Ordering::Relaxed);
+            let hi = self.ids.hi.load(Ordering::Relaxed);
+            if hi > self.meta.next_doc_id {
+                self.meta.next_doc_id = hi;
+                self.dirty = true;
+            }
+        }
     }
 
     /// Rewrites the collection's catalog entry when meta changed.
@@ -126,7 +155,7 @@ impl<P: PageIo> Collection<P> {
     /// Approximate live-document count for cost estimation (§13) —
     /// derived from the doc-id cursor; overestimates after deletes.
     pub fn scan_count_hint(&self) -> u64 {
-        self.id_cursor.saturating_sub(1)
+        self.ids.next.load(Ordering::Relaxed).saturating_sub(1)
     }
 
     fn pk_key(id: DocumentId) -> [u8; 8] {
@@ -151,11 +180,8 @@ impl<P: PageIo> Collection<P> {
                     doc.id.get()
                 )));
             }
-            self.id_cursor = self.id_cursor.max(doc.id.get() + 1);
-            if self.id_cursor >= self.meta.next_doc_id {
-                self.meta.next_doc_id = self.id_cursor + 1023;
-                self.dirty = true;
-            }
+            self.ids.next.fetch_max(doc.id.get() + 1, Ordering::Relaxed);
+            self.ensure_watermark(doc.id.get() + 1);
             doc.id
         };
         self.insert_inner(txn, &doc, 1)?;

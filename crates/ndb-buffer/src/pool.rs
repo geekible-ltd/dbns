@@ -45,6 +45,9 @@ struct Frame {
 struct Shared {
     frames: Vec<Arc<Frame>>,
     state: Mutex<PoolState>,
+    /// §15.7 storage statistics — cumulative fetches and evictions.
+    fetches: std::sync::atomic::AtomicU64,
+    evictions: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Default)]
@@ -96,6 +99,8 @@ impl<P: PageIo> BufferPool<P> {
                 shared: Arc::new(Shared {
                     frames,
                     state: Mutex::new(PoolState::default()),
+                    fetches: std::sync::atomic::AtomicU64::new(0),
+                    evictions: std::sync::atomic::AtomicU64::new(0),
                 }),
                 page_hook: Mutex::new(None),
                 flush_gate: Mutex::new(None),
@@ -114,6 +119,32 @@ impl<P: PageIo> BufferPool<P> {
     }
 
     /// Number of pages currently resident.
+    /// Cumulative page loads from disk (§15.7 stats).
+    pub fn fetch_count(&self) -> u64 {
+        self.inner
+            .shared
+            .fetches
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Cumulative frame evictions (§15.7 stats).
+    pub fn eviction_count(&self) -> u64 {
+        self.inner
+            .shared
+            .evictions
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Pool handle used by admin endpoints (§15.7).
+    pub fn pool_stats(&self) -> (usize, usize, u64, u64) {
+        (
+            self.frame_count(),
+            self.resident_pages(),
+            self.fetch_count(),
+            self.eviction_count(),
+        )
+    }
+
     pub fn resident_pages(&self) -> usize {
         self.inner.shared.state.lock().unwrap().table.len()
     }
@@ -271,6 +302,9 @@ impl<P: PageIo> BufferPool<P> {
         // Miss: pick a victim frame under the state lock.
         let mut state = shared.state.lock().unwrap();
         let frame = self.evict_candidate(&mut state)?;
+        shared
+            .evictions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut meta = frame.meta.lock().unwrap();
         // If the victim holds a page, flush it out.
         if let Some(old_id) = meta.page_id.take() {
@@ -283,6 +317,9 @@ impl<P: PageIo> BufferPool<P> {
         }
         // Load the requested page into the frame.
         let mut mgr = self.inner.mgr.lock().unwrap();
+        shared
+            .fetches
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let page = mgr.read_page(id)?;
         *frame.page.write().unwrap() = page;
         *meta = FrameMeta {

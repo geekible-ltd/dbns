@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 ndb-common.workspace = true
 crc32fast.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

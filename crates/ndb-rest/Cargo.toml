@@ -1,0 +1,34 @@
+[package]
+name = "ndb-rest"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ndb-common = { path = "../ndb-common" }
+ndb-document = { path = "../ndb-document" }
+ndb-index = { path = "../ndb-index" }
+ndb-aggregation = { path = "../ndb-aggregation" }
+ndb-query-executor = { path = "../ndb-query-executor" }
+ndb-hybrid = { path = "../ndb-hybrid" }
+ndb-vector = { path = "../ndb-vector" }
+ndb-hnsw = { path = "../ndb-hnsw" }
+ndb-analyzer = { path = "../ndb-analyzer" }
+ndb-config = { path = "../ndb-config" }
+ndb-page = { path = "../ndb-page" }
+ndb-transaction = { path = "../ndb-transaction" }
+ndb-buffer = { path = "../ndb-buffer" }
+axum.workspace = true
+tower-http.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+ndb-page = { path = "../ndb-page" }
+ndb-buffer = { path = "../ndb-buffer" }
+ndb-wal = { path = "../ndb-wal" }
+tower.workspace = true
+http.workspace = true
+tempfile.workspace = true

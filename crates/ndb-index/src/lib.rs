@@ -39,6 +39,10 @@ pub struct Engine<P: PageIo> {
     txns: TxnManager<P>,
     pool: Arc<BufferPool<P>>,
     next_collection_id: AtomicU64,
+    /// Live doc-id allocators keyed by catalog key — shared across the
+    /// per-request `Collection` handles so the in-memory cursor (and the
+    /// amortized watermark block) isn't reset on every `collection()` call.
+    id_allocs: std::sync::Mutex<std::collections::HashMap<Vec<u8>, Arc<collection::IdAlloc>>>,
 }
 
 impl<P: PageIo> Engine<P> {
@@ -53,6 +57,7 @@ impl<P: PageIo> Engine<P> {
             txns: TxnManager::create(Arc::clone(&pool), wal, cfg)?,
             pool,
             next_collection_id: AtomicU64::new(1),
+            id_allocs: std::sync::Mutex::new(std::collections::HashMap::new()),
         })
     }
 
@@ -80,10 +85,17 @@ impl<P: PageIo> Engine<P> {
             txns,
             pool,
             next_collection_id: AtomicU64::new(max_id + 1),
+            id_allocs: std::sync::Mutex::new(std::collections::HashMap::new()),
         })
     }
 
     /// The underlying transaction manager.
+    /// The buffer pool — needed by the aggregation pipeline's `$group`
+    /// spill and admin storage stats (§15.7).
+    pub fn pool(&self) -> &Arc<BufferPool<P>> {
+        &self.pool
+    }
+
     pub fn txns(&self) -> &TxnManager<P> {
         &self.txns
     }
@@ -191,6 +203,7 @@ impl<P: PageIo> Engine<P> {
         name: &str,
     ) -> ndb_common::Result<()> {
         txn.delete(&coll_key(db, name))?;
+        self.id_allocs.lock().unwrap().remove(&coll_key(db, name));
         Ok(())
     }
 
@@ -205,11 +218,20 @@ impl<P: PageIo> Engine<P> {
         match txn.get(&coll_key(db, name))? {
             Some(bytes) => {
                 let meta = CollectionMeta::decode(&bytes)?;
+                let key = coll_key(db, name);
+                let ids = self
+                    .id_allocs
+                    .lock()
+                    .unwrap()
+                    .entry(key.clone())
+                    .or_insert_with(|| Arc::new(collection::IdAlloc::new(meta.next_doc_id)))
+                    .clone();
                 Ok(Some(Collection::open(
                     meta,
                     &self.pool,
                     self.txns.btree(),
-                    coll_key(db, name),
+                    key,
+                    ids,
                 )?))
             }
             None => Ok(None),

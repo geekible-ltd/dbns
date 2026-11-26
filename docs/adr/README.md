@@ -27,7 +27,7 @@ The spec (§28) pre-allocates this list — add new ADRs beyond ADR-020 as neede
 | ADR-014 | Hybrid search using RRF | accepted |
 | ADR-015 | MongoDB-inspired query language | accepted |
 | ADR-016 | Near-real-time search visibility | proposed |
-| ADR-017 | REST and gRPC interfaces | proposed |
+| ADR-017 | REST and gRPC interfaces | accepted |
 | ADR-018 | Multi-tenancy and RBAC | proposed |
 | ADR-019 | Encryption and key management | proposed |
 | ADR-020 | Cross-platform storage abstraction | proposed |

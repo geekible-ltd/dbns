@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NDB Management</title>
+    <style>
+      :root { font-family: ui-monospace, Menlo, monospace; color-scheme: dark; }
+      body { margin: 0; background: #111418; color: #d5dbe3; }
+      #root { display: flex; height: 100vh; }
+      nav { width: 190px; background: #181c22; padding: 14px 10px; border-right: 1px solid #262c36; }
+      nav h1 { font-size: 15px; margin: 0 0 16px; color: #7ab3ff; }
+      nav button { display: block; width: 100%; text-align: left; background: none; border: none;
+        color: #aab4c0; padding: 7px 10px; border-radius: 6px; cursor: pointer; font: inherit; }
+      nav button.on, nav button:hover { background: #232a35; color: #fff; }
+      main { flex: 1; padding: 18px 24px; overflow: auto; }
+      h2 { font-size: 16px; color: #7ab3ff; margin-top: 0; }
+      table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+      td, th { border: 1px solid #262c36; padding: 5px 9px; font-size: 12.5px; text-align: left; }
+      th { background: #1c2129; }
+      input, textarea, select { background: #181c22; color: #d5dbe3; border: 1px solid #2c333f;
+        border-radius: 5px; padding: 6px 9px; font: inherit; }
+      textarea { width: 100%; min-height: 90px; }
+      button.act { background: #1f5fbf; color: #fff; border: none; border-radius: 5px;
+        padding: 6px 12px; cursor: pointer; font: inherit; margin: 4px 4px 4px 0; }
+      button.act:hover { background: #2a72d6; }
+      button.danger { background: #7c2d2d; }
+      .card { background: #181c22; border: 1px solid #262c36; border-radius: 8px; padding: 12px 16px; margin: 10px 0; }
+      .err { color: #ff7b72; white-space: pre-wrap; }
+      .ok { color: #7ee787; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+      .stat { font-size: 22px; color: #fff; }
+      .lbl { font-size: 11px; color: #8a94a3; text-transform: uppercase; }
+      a.link { color: #7ab3ff; cursor: pointer; text-decoration: underline; }
+      pre { background: #14171c; padding: 10px; border-radius: 6px; overflow: auto; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

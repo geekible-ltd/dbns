@@ -1,0 +1,227 @@
+syntax = "proto3";
+
+// NDB API — versioned definitions (spec §16). Document payloads travel as
+// JSON strings (the §15 wire format); typed fields cover routing + options.
+package dbns.v1;
+
+message Empty {}
+
+// ---- shared --------------------------------------------------------------
+
+message CollRef {
+  string database = 1;
+  string collection = 2;
+}
+
+message DocRef {
+  string database = 1;
+  string collection = 2;
+  uint64 id = 3;
+}
+
+// A document as the §15 JSON wire form: {"_id": n, ...fields}.
+message DocJson {
+  string json = 1;
+}
+
+// One search result row: document + score + contributing legs.
+message DocHit {
+  DocJson doc = 1;
+  double score = 2;
+  repeated string legs = 3;
+}
+
+message ErrorInfo {
+  string message = 1;
+}
+
+// ---- DatabaseService -----------------------------------------------------
+
+service DatabaseService {
+  rpc ListDatabases(Empty) returns (DbList);
+  rpc CreateDatabase(NameReq) returns (DbStatus);
+  rpc GetDatabase(NameReq) returns (DbDetail);
+  rpc DropDatabase(NameReq) returns (DbStatus);
+}
+
+message NameReq { string name = 1; }
+message DbList { repeated string databases = 1; }
+message DbStatus { bool ok = 1; string detail = 2; }
+message DbDetail { string name = 1; repeated string collections = 2; }
+
+// ---- CollectionService ---------------------------------------------------
+
+service CollectionService {
+  rpc ListCollections(DbRef) returns (CollList);
+  rpc CreateCollection(CreateCollReq) returns (CollStatus);
+  rpc GetCollection(CollRef) returns (CollDetail);
+  rpc DropCollection(CollRef) returns (CollStatus);
+}
+
+message DbRef { string database = 1; }
+message CreateCollReq {
+  string database = 1;
+  string name = 2;
+  string schema_json = 3; // optional §6 JSON schema
+}
+message CollList { repeated string collections = 1; }
+message CollStatus { bool ok = 1; string detail = 2; }
+message CollDetail { string json = 1; } // §15 collection-details JSON
+
+// ---- DocumentService -----------------------------------------------------
+
+service DocumentService {
+  rpc Insert(InsertReq) returns (InsertRes);
+  rpc Get(DocRef) returns (DocJson);
+  rpc Replace(ReplaceReq) returns (DocJson);
+  rpc Update(UpdateReq) returns (DocJson); // PATCH-merge semantics
+  rpc Delete(DocRef) returns (DbStatus);
+  // streaming (spec §16): client-streamed bulk insert, server-streamed
+  // bulk retrieval.
+  rpc BulkInsert(stream DocJson) returns (BulkRes);
+  rpc BulkGet(CollRef) returns (stream DocJson);
+}
+
+message InsertReq {
+  string database = 1;
+  string collection = 2;
+  DocJson doc = 3;
+}
+message InsertRes { uint64 id = 1; }
+message ReplaceReq {
+  string database = 1;
+  string collection = 2;
+  uint64 id = 3;
+  DocJson doc = 4;
+}
+message UpdateReq {
+  string database = 1;
+  string collection = 2;
+  uint64 id = 3;
+  DocJson patch = 4;
+}
+message BulkRes { uint64 inserted = 1; }
+
+// ---- SearchService -------------------------------------------------------
+
+service SearchService {
+  // Server-streaming results (spec §16 — large result sets).
+  rpc Find(FindReq) returns (stream DocHit);
+  rpc TextSearch(TextSearchReq) returns (stream DocHit);
+  rpc VectorSearch(VectorSearchReq) returns (stream DocHit);
+  rpc HybridSearch(HybridSearchReq) returns (stream DocHit);
+  rpc Aggregate(AggregateReq) returns (stream DocJson);
+  rpc Explain(FindReq) returns (ExplainRes);
+}
+
+message FindReq {
+  string database = 1;
+  string collection = 2;
+  string query_json = 3; // find body (filter/sort/limit/projection)
+}
+message TextSearchReq {
+  string database = 1;
+  string collection = 2;
+  string index = 3;
+  string query = 4;
+  string kind = 5;   // match|phrase|fuzzy
+  string field = 6;
+  uint32 top_k = 7;
+  uint32 slop = 8;
+  uint32 max_edits = 9;
+  uint32 max_expansions = 10;
+}
+message VectorSearchReq {
+  string database = 1;
+  string collection = 2;
+  string index = 3;
+  repeated float vector = 4;
+  uint32 k = 5;
+  uint32 ef = 6;
+}
+message HybridSearchReq {
+  string database = 1;
+  string collection = 2;
+  string text_index = 3;
+  string text_query = 4;
+  string vector_index = 5;
+  repeated float vector = 6;
+  uint32 vector_ef = 7;
+  uint32 limit = 8;
+  uint32 fetch_k = 9;
+  uint32 rrf_k = 10;
+  repeated double leg_weights = 11;
+}
+message AggregateReq {
+  string database = 1;
+  string collection = 2;
+  string pipeline_json = 3;
+}
+message ExplainRes { string access = 1; repeated string explain = 2; uint64 est_scanned = 3; }
+
+// ---- IndexService --------------------------------------------------------
+
+service IndexService {
+  rpc ListIndexes(CollRef) returns (IndexList);
+  rpc CreateIndex(IndexDef) returns (DbStatus);
+  rpc DropIndex(IndexRef) returns (DbStatus);
+  rpc IndexStatus(IndexRef) returns (IndexStatusRes);
+  rpc RebuildIndex(IndexRef) returns (DbStatus);
+}
+
+message IndexRef {
+  string database = 1;
+  string collection = 2;
+  string name = 3;
+}
+message IndexDef {
+  string database = 1;
+  string collection = 2;
+  string name = 3;
+  string kind = 4;          // secondary|text|vector
+  repeated string fields = 5;
+  bool unique = 6;
+  bool sparse = 7;
+  string field = 8;         // text/vector single field
+  repeated double weights = 9; // text field weights
+  uint32 dims = 10;
+  string metric = 11;       // cosine|dot|euclidean
+  uint32 m = 12;
+  uint32 ef_construction = 13;
+  uint32 ef_search = 14;
+}
+message IndexList { repeated string json = 1; }
+message IndexStatusRes { string name = 1; string kind = 2; string status = 3; string detail_json = 4; }
+
+// ---- AdministrationService -----------------------------------------------
+
+service AdministrationService {
+  rpc Metrics(Empty) returns (AdminJson);
+  rpc Config(Empty) returns (AdminJson);
+  rpc Storage(Empty) returns (AdminJson);
+  rpc TxnStatus(Empty) returns (AdminJson);
+  rpc Info(Empty) returns (AdminJson);
+  // Streaming admin status updates (spec §16) — one snapshot per interval.
+  rpc WatchStatus(WatchReq) returns (stream AdminJson);
+}
+
+message AdminJson { string json = 1; }
+message WatchReq { uint32 interval_ms = 1; uint32 count = 2; }
+
+// ---- ClusterService ------------------------------------------------------
+
+service ClusterService {
+  rpc Status(Empty) returns (AdminJson); // single-node until Phase 9
+}
+
+// ---- TransactionService --------------------------------------------------
+// Advisory for now: engine transactions are per-request borrows, so true
+// multi-call client transactions need a session layer — that arrives with
+// distributed transactions in Phase 9. These RPCs document the surface and
+// return UNIMPLEMENTED.
+service TransactionService {
+  rpc Begin(Empty) returns (TxnHandle);
+  rpc Commit(TxnHandle) returns (DbStatus);
+  rpc Rollback(TxnHandle) returns (DbStatus);
+}
+message TxnHandle { uint64 id = 1; }

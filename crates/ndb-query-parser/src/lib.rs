@@ -59,6 +59,7 @@ pub fn parse_find(src: &str) -> ndb_common::Result<FindQuery> {
     let collection = req_str(obj, "collection")?;
     let database = opt_str(obj, "database").unwrap_or_else(|| "default".into());
     let filter = match obj.get("filter") {
+        Some(J::Object(f)) if f.is_empty() => None,
         Some(J::Object(f)) => Some(parse_filter_obj(f)?),
         Some(_) => return err("'filter' must be an object"),
         None => None,
@@ -432,11 +433,21 @@ fn parse_stage(j: &J) -> ndb_common::Result<Stage> {
     let (name, arg) = obj.iter().next().unwrap();
     match name.as_str() {
         "$match" => {
-            Ok(Stage::Match {
-                filter: parse_filter_obj(arg.as_object().ok_or_else(|| {
-                    Error::InvalidInput("pipeline: $match needs an object".into())
-                })?)?,
-            })
+            let m = arg
+                .as_object()
+                .ok_or_else(|| Error::InvalidInput("pipeline: $match needs an object".into()))?;
+            if m.is_empty() {
+                Ok(Stage::Match {
+                    filter: Expr::Logical {
+                        op: LogicalOp::And,
+                        children: vec![],
+                    },
+                })
+            } else {
+                Ok(Stage::Match {
+                    filter: parse_filter_obj(m)?,
+                })
+            }
         }
         "$sort" => Ok(Stage::Sort {
             keys: parse_sort(

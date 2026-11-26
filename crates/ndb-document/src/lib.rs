@@ -16,6 +16,7 @@
 pub mod codec;
 pub mod dict;
 pub mod document;
+pub mod json;
 pub mod schema;
 pub mod value;
 
