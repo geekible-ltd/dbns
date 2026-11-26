@@ -207,6 +207,23 @@ impl<P: PageIo> PageManager<P> {
             .write_at(self.offset_of(header.page_id), page.as_bytes())
     }
 
+    /// Recovery path (spec §22.3): writes a raw page image verbatim —
+    /// bypassing the allocation checks in [`Self::write_page`], since the
+    /// image may belong to a page beyond the persisted high-water mark.
+    /// The image must already carry a valid header and checksum.
+    pub fn restore_page(&mut self, id: PageId, image: &[u8]) -> ndb_common::Result<()> {
+        if image.len() != self.page_size as usize {
+            return Err(Error::InvalidInput(format!(
+                "restore_page: image is {} bytes, page size is {}",
+                image.len(),
+                self.page_size
+            )));
+        }
+        self.ensure_capacity(id)?;
+        self.allocator.bump_high_water(id.get() + 1);
+        self.io.write_at(self.offset_of(id), image)
+    }
+
     /// Flushes the backing store to durable media.
     pub fn sync(&mut self) -> ndb_common::Result<()> {
         self.io.sync()

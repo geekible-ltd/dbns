@@ -5,3 +5,10 @@ edition.workspace = true
 
 [dependencies]
 ndb-common.workspace = true
+ndb-btree = { path = "../ndb-btree" }
+ndb-buffer = { path = "../ndb-buffer" }
+ndb-page = { path = "../ndb-page" }
+ndb-wal = { path = "../ndb-wal" }
+
+[dev-dependencies]
+tempfile.workspace = true

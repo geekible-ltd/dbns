@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn roundtrip_all_types() {
-        let cases = vec![
+        let cases = [
             WalRecord::PageUpdate {
                 page_id: PageId::new(7),
                 before: vec![1, 2, 3],
@@ -154,9 +154,7 @@ mod tests {
             },
             WalRecord::Commit,
             WalRecord::Abort,
-            WalRecord::Checkpoint {
-                lsn: Lsn::new(99),
-            },
+            WalRecord::Checkpoint { lsn: Lsn::new(99) },
         ];
         for (i, r) in cases.iter().enumerate() {
             let bytes = r.encode(Lsn::new(i as u64 + 1), TransactionId::new(42));

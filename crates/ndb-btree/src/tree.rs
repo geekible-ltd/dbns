@@ -128,13 +128,52 @@ impl<P: PageIo> BTree<P> {
         loop {
             let b = g.page().body();
             if is_leaf(b) {
-                return Ok(match leaf::find(b, key) {
-                    Ok(i) => Some(leaf::val(b, i).to_vec()),
+                let (g, pos) = self.leaf_scan_to(g, key)?;
+                return Ok(match pos {
+                    Ok(i) => Some(leaf::val(g.page().body(), i).to_vec()),
                     Err(_) => None,
                 });
             }
             let child = internal::find_child(b, key);
             g = self.pool.fetch_read(child)?;
+        }
+    }
+
+    /// Positions a leaf read-guard on `key`, compensating for concurrent
+    /// splits: if `key` sorts past this leaf's end it may live in the right
+    /// sibling (the leaf split between our parent's routing and our latch),
+    /// so hop right while the next leaf's first key is `<= key`.
+    ///
+    /// Returns the guard and `leaf::find`'s result in that leaf
+    /// (`Ok(idx)` = exact, `Err(pos)` = insertion point).
+    fn leaf_scan_to(
+        &self,
+        mut g: ndb_buffer::PageReadGuard,
+        key: &[u8],
+    ) -> ndb_common::Result<(ndb_buffer::PageReadGuard, Result<usize, usize>)> {
+        loop {
+            let end = key_count(g.page().body());
+            match leaf::find(g.page().body(), key) {
+                Ok(i) => return Ok((g, Ok(i))),
+                Err(pos) if pos < end => return Ok((g, Err(pos))),
+                Err(_) => {
+                    let next = leaf::next(g.page().body());
+                    let Ok(ng) = self.pool.fetch_read(next) else {
+                        return Ok((g, Err(end))); // right leaf freed mid-merge
+                    };
+                    if next.get() == 0 || !is_leaf(ng.page().body()) {
+                        return Ok((g, Err(end)));
+                    }
+                    let nb = ng.page().body();
+                    if key_count(nb) > 0 && key < leaf::key(nb, 0) {
+                        // Key sorts before the right leaf's range — it
+                        // can't be further right. Position stays at this
+                        // leaf's end.
+                        return Ok((g, Err(end)));
+                    }
+                    g = ng; // key belongs at-or-right: keep hopping
+                }
+            }
         }
     }
 
@@ -190,38 +229,42 @@ impl<P: PageIo> BTree<P> {
         }
 
         let node_id = g.page().header()?.page_id;
-        match leaf::find(g.page().body(), key) {
+        let pos = match leaf::find(g.page().body(), key) {
             Ok(idx) => {
-                let b = g.page_mut().body_mut();
-                leaf::remove_at(b, idx);
-                leaf::insert_at(b, idx, key, val)?;
-                Ok(true)
+                // Remove the stale cell and treat this as a fresh insert at
+                // `idx` — the replacement may not fit back in place (a grown
+                // value on a full leaf), in which case the split path below
+                // handles it. Removing first is safe: the leaf still holds
+                // every other key, and `fits`/`split` see the reclaimed space.
+                leaf::remove_at(g.page_mut().body_mut(), idx);
+                idx
             }
-            Err(pos) => {
-                if leaf::fits(g.page().body(), key.len(), val.len()) {
-                    leaf::insert_at(g.page_mut().body_mut(), pos, key, val)?;
-                    return Ok(true);
-                }
-                // Split the leaf: right page takes the upper half.
-                let mut entries = leaf::entries(g.page().body());
-                entries.insert(pos, (key.to_vec(), val.to_vec()));
-                let mid = entries.len() / 2;
-                let right_entries = entries.split_off(mid);
-                let right_id = self.pool.allocate_page(PageType::BTreeLeaf)?;
-                {
-                    let mut rg = self.pool.fetch_write(right_id)?;
-                    let rb = rg.page_mut().body_mut();
-                    leaf::init(rb);
-                    leaf::rebuild(rb, &right_entries);
-                    leaf::set_next(rb, leaf::next(g.page().body()));
-                }
-                let sep = right_entries[0].0.clone();
-                let b = g.page_mut().body_mut();
-                leaf::rebuild(b, &entries);
-                leaf::set_next(b, right_id);
-                self.propagate(path, node_id, sep, right_id)?;
-                Ok(true)
+            Err(pos) => pos,
+        };
+        {
+            if leaf::fits(g.page().body(), key.len(), val.len()) {
+                leaf::insert_at(g.page_mut().body_mut(), pos, key, val)?;
+                return Ok(true);
             }
+            // Split the leaf: right page takes the upper half.
+            let mut entries = leaf::entries(g.page().body());
+            entries.insert(pos, (key.to_vec(), val.to_vec()));
+            let mid = entries.len() / 2;
+            let right_entries = entries.split_off(mid);
+            let right_id = self.pool.allocate_page(PageType::BTreeLeaf)?;
+            {
+                let mut rg = self.pool.fetch_write(right_id)?;
+                let rb = rg.page_mut().body_mut();
+                leaf::init(rb);
+                leaf::rebuild(rb, &right_entries);
+                leaf::set_next(rb, leaf::next(g.page().body()));
+            }
+            let sep = right_entries[0].0.clone();
+            let b = g.page_mut().body_mut();
+            leaf::rebuild(b, &entries);
+            leaf::set_next(b, right_id);
+            self.propagate(path, node_id, sep, right_id)?;
+            Ok(true)
         }
     }
 
@@ -463,7 +506,8 @@ impl<P: PageIo> BTree<P> {
         loop {
             let b = g.page().body();
             if is_leaf(b) {
-                let idx = match leaf::find(b, key) {
+                let (g, pos) = self.leaf_scan_to(g, key)?;
+                let idx = match pos {
                     Ok(i) | Err(i) => i,
                 };
                 return Ok(crate::cursor::Cursor::new(Arc::clone(&self.pool), g, idx));

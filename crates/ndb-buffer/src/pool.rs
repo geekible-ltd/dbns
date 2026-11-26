@@ -54,6 +54,16 @@ struct PoolState {
     clock_hand: usize,
 }
 
+/// Journaling hook (ADR-006): invoked on write-guard drop when the page
+/// bytes changed — `(page_id, before_image, after_image) -> lsn`. The LSN
+/// is stamped into the page header so the flush gate knows which WAL
+/// position covers this page.
+pub type PageHook = dyn Fn(PageId, &[u8], &[u8]) -> u64 + Send + Sync;
+
+/// WAL-before-data gate: called with a dirty page's LSN before the page is
+/// written to the data file; must ensure the WAL is durable to that LSN.
+pub type FlushGate = dyn Fn(u64) -> ndb_common::Result<()> + Send + Sync;
+
 /// A bounded buffer pool over a [`PageManager`].
 pub struct BufferPool<P: PageIo> {
     inner: Arc<Inner<P>>,
@@ -62,6 +72,8 @@ pub struct BufferPool<P: PageIo> {
 struct Inner<P: PageIo> {
     mgr: Mutex<PageManager<P>>,
     shared: Arc<Shared>,
+    page_hook: Mutex<Option<Arc<PageHook>>>,
+    flush_gate: Mutex<Option<Arc<FlushGate>>>,
 }
 
 impl<P: PageIo> BufferPool<P> {
@@ -85,6 +97,8 @@ impl<P: PageIo> BufferPool<P> {
                     frames,
                     state: Mutex::new(PoolState::default()),
                 }),
+                page_hook: Mutex::new(None),
+                flush_gate: Mutex::new(None),
             }),
         }
     }
@@ -160,10 +174,14 @@ impl<P: PageIo> BufferPool<P> {
             }
         };
         frame.meta.lock().unwrap().dirty = true;
+        let hook = self.page_hook();
+        let before = hook.as_ref().map(|_| g.as_bytes().to_vec());
         let guard = unsafe { force_static_write(g) };
         Ok(Some(PageWriteGuard {
             frame,
             shared: Arc::clone(&self.inner.shared),
+            hook,
+            before,
             guard,
         }))
     }
@@ -173,12 +191,42 @@ impl<P: PageIo> BufferPool<P> {
     pub fn fetch_write(&self, id: PageId) -> ndb_common::Result<PageWriteGuard> {
         let frame = self.pin(id)?;
         frame.meta.lock().unwrap().dirty = true;
-        let guard = unsafe { force_static_write(frame.page.write().unwrap()) };
+        let g = frame.page.write().unwrap();
+        let hook = self.page_hook();
+        let before = hook.as_ref().map(|_| g.as_bytes().to_vec());
+        let guard = unsafe { force_static_write(g) };
         Ok(PageWriteGuard {
             frame,
             shared: Arc::clone(&self.inner.shared),
+            hook,
+            before,
             guard,
         })
+    }
+
+    /// Installs the journaling hook invoked when a write-latched page is
+    /// released with modified bytes (ADR-006).
+    pub fn set_page_hook(&self, hook: Option<Arc<PageHook>>) {
+        *self.inner.page_hook.lock().unwrap() = hook;
+    }
+
+    /// Installs the WAL-before-data gate consulted before writing any dirty
+    /// page to the data file.
+    pub fn set_flush_gate(&self, gate: Option<Arc<FlushGate>>) {
+        *self.inner.flush_gate.lock().unwrap() = gate;
+    }
+
+    fn page_hook(&self) -> Option<Arc<PageHook>> {
+        self.inner.page_hook.lock().unwrap().clone()
+    }
+
+    /// Runs the flush gate for a page about to be written back.
+    fn gate(&self, page: &Page) -> ndb_common::Result<()> {
+        let gate = self.inner.flush_gate.lock().unwrap().clone();
+        if let (Some(gate), Ok(h)) = (gate, page.header()) {
+            gate(h.lsn.get())?;
+        }
+        Ok(())
     }
 
     /// Flushes every dirty resident page through the page manager, then
@@ -198,9 +246,9 @@ impl<P: PageIo> BufferPool<P> {
             .map(|(id, f)| (*id, Arc::clone(f)))
             .collect();
         let mut mgr = self.inner.mgr.lock().unwrap();
-        for (id, frame) in dirty {
+        for (_id, frame) in dirty {
             let mut page = frame.page.write().unwrap();
-            let _ = id;
+            self.gate(&page)?;
             mgr.write_page(&mut page)?;
             frame.meta.lock().unwrap().dirty = false;
         }
@@ -228,6 +276,7 @@ impl<P: PageIo> BufferPool<P> {
         if let Some(old_id) = meta.page_id.take() {
             let mut page = frame.page.write().unwrap();
             if meta.dirty {
+                self.gate(&page)?;
                 self.inner.mgr.lock().unwrap().write_page(&mut page)?;
             }
             state.table.remove(&old_id);
@@ -317,6 +366,9 @@ pub struct PageWriteGuard {
     frame: Arc<Frame>,
     #[allow(dead_code)]
     shared: Arc<Shared>,
+    /// Page bytes at fetch time — captured only when a page hook is set.
+    before: Option<Vec<u8>>,
+    hook: Option<Arc<PageHook>>,
     guard: RwLockWriteGuard<'static, Page>,
 }
 
@@ -333,6 +385,25 @@ impl PageWriteGuard {
 
 impl Drop for PageWriteGuard {
     fn drop(&mut self) {
+        // Journal the change under the write latch while both images are
+        // available, then stamp the page LSN so the flush gate can order
+        // WAL before data (ADR-006). The checksum is refreshed BEFORE
+        // capturing the after-image so every journaled image verifies —
+        // the body's mutations left the stored checksum stale.
+        if let (Some(hook), Some(before)) = (&self.hook, &self.before)
+            && before.as_slice() != self.guard.as_bytes()
+        {
+            self.guard.refresh_checksum();
+            let after = self.guard.as_bytes();
+            let id = self.frame.meta.lock().unwrap().page_id;
+            if let Some(id) = id {
+                let lsn = hook(id, before, after);
+                if let Ok(mut h) = self.guard.header() {
+                    h.lsn = ndb_common::ids::Lsn::new(lsn);
+                    self.guard.write_header(h);
+                }
+            }
+        }
         unpin(&self.frame);
     }
 }
@@ -425,5 +496,57 @@ mod tests {
         let _g = pool.fetch_read(id1).unwrap(); // pin the only frame
         // Next fetch has no evictable frame.
         assert!(matches!(pool.fetch_read(id2), Err(Error::Internal(_))));
+    }
+
+    #[test]
+    fn page_hook_journals_changes_and_stamps_lsn() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let pool = pool(4);
+        let calls = Arc::new(AtomicU64::new(0));
+        let calls2 = Arc::clone(&calls);
+        pool.set_page_hook(Some(Arc::new(move |id, before, after| {
+            calls2.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(id.get() % 2, 1); // our test pages
+            assert_ne!(before, after);
+            42 // lsn
+        })));
+
+        let id = pool.allocate_page(PageType::BTreeLeaf).unwrap();
+        {
+            let mut g = pool.fetch_write(id).unwrap();
+            g.page_mut().body_mut()[0] = 0xAA;
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // LSN was stamped into the header.
+        let g = pool.fetch_read(id).unwrap();
+        assert_eq!(g.page().header().unwrap().lsn.get(), 42);
+        drop(g);
+        // A write fetch that changes nothing does not journal.
+        {
+            let _g = pool.fetch_write(id).unwrap();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn flush_gate_runs_before_dirty_write_back() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let seen = Arc::new(AtomicU64::new(0));
+        let seen2 = Arc::clone(&seen);
+        let pool = pool(1); // single frame forces eviction write-back
+        pool.set_page_hook(Some(Arc::new(|_, _, _| 7)));
+        pool.set_flush_gate(Some(Arc::new(move |lsn| {
+            seen2.store(lsn, Ordering::SeqCst);
+            Ok(())
+        })));
+        let id1 = pool.allocate_page(PageType::BTreeLeaf).unwrap();
+        let id2 = pool.allocate_page(PageType::BTreeLeaf).unwrap();
+        {
+            let mut g = pool.fetch_write(id1).unwrap();
+            g.page_mut().body_mut()[0] = 1;
+        }
+        // Evict id1 by fetching id2 — the gate must have fired with lsn 7.
+        let _g = pool.fetch_write(id2).unwrap();
+        assert_eq!(seen.load(Ordering::SeqCst), 7);
     }
 }

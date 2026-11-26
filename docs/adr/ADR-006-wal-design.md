@@ -31,7 +31,8 @@ after a crash, and uncommitted changes to be removable.
 
 - +16–32 KB of WAL per modified page — space-heavy but simple and correct;
   delta encoding is a later optimisation.
-- Live rollback restores before-images through ordinary write latches —
-  compensation records are themselves journaled (ARIES-style), so a crash
-  mid-rollback still recovers correctly.
+- Live rollback is *logical* — it edits version chains through ordinary write
+  latches rather than restoring before-images, so rollback edits are
+  themselves journaled (ARIES-style): a crash mid-rollback still recovers
+  correctly. Page before-images are used only by crash recovery.
 - All logging flows through the pool hook — the B+Tree needs no txn logic.

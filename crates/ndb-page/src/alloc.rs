@@ -36,6 +36,12 @@ impl PageAllocator {
         }
     }
 
+    /// Raises the high-water mark — recovery may restore pages beyond the
+    /// persisted mark before meta-page state catches up.
+    pub fn bump_high_water(&mut self, v: u64) {
+        self.high_water = self.high_water.max(v);
+    }
+
     /// Next page ID that has never been allocated.
     pub fn high_water(&self) -> u64 {
         self.high_water

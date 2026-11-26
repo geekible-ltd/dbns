@@ -9,7 +9,13 @@ architectural decisions. This file is a working summary, not a replacement.
 
 ## Current state
 
-Phase 2 complete (see `docs/progress.md`):
+Phase 3 in progress (see `docs/progress.md`):
+- `ndb-wal` — segmented append-only log, len+CRC32 framing, torn-tail
+  truncation, rotation + retirement, recovery scanner. ADR-006.
+- `ndb-buffer` — plus page-journaling hook + WAL flush gate (ADR-006).
+- `ndb-transaction` — `TxnManager`/`Transaction` (serialized writers), MVCC
+  versioned leaf values, snapshot isolation, inline GC, catalog page,
+  `recover()` (undo uncommitted, redo committed). ADR-007.
 - `ndb-buffer` — fixed-frame `BufferPool`, clock eviction, dirty write-back,
   RAII read/write pin guards (`RwLock<Page>` per frame), `try_fetch_write`.
 - `ndb-btree` — slotted-page nodes, pessimistic latch-coupled `BTree`

@@ -1,7 +1,17 @@
-//! `ndb-transaction` — transaction lifecycle and commit coordination
-//! (spec §7, §19.1).
+//! `ndb-transaction` — transaction lifecycle, MVCC snapshots, checkpointing
+//! and crash recovery (spec §5.5–5.7, §7.1; ADR-006/007).
 //!
-//! MVCC integration and snapshot isolation arrive with `ndb-mvcc` in a later
-//! phase; this crate owns begin/commit/rollback coordination (spec §7.1).
+//! - [`manager::TxnManager`] — begin/commit/rollback over the B+Tree+WAL
+//! - [`manager::recover`] — WAL replay after a crash
+//! - [`versioned::VersionedValue`] — the MVCC version chain in leaf values
+//! - [`journal`] — the pool-to-WAL journaling hook (ADR-006)
 //!
-//! Implementation begins in Phase 3 (spec §26).
+//! Phase-3 policy: writers are serialized; snapshot readers never block.
+
+pub mod journal;
+pub mod manager;
+pub mod versioned;
+
+pub use journal::{Journal, SYSTEM_TXN};
+pub use manager::{CATALOG_PAGE, RecoveryReport, Transaction, TxnConfig, TxnManager, recover};
+pub use versioned::{Version, VersionedValue};

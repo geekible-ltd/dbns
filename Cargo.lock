@@ -805,14 +805,22 @@ dependencies = [
 name = "ndb-transaction"
 version = "0.1.0"
 dependencies = [
+ "ndb-btree",
+ "ndb-buffer",
  "ndb-common",
+ "ndb-page",
+ "ndb-wal",
+ "tempfile",
 ]
 
 [[package]]
 name = "ndb-wal"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
  "ndb-common",
+ "ndb-page",
+ "tempfile",
 ]
 
 [[package]]

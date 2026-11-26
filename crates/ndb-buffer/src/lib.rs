@@ -5,4 +5,4 @@
 
 pub mod pool;
 
-pub use pool::{BufferPool, PageReadGuard, PageWriteGuard};
+pub use pool::{BufferPool, FlushGate, PageHook, PageReadGuard, PageWriteGuard};

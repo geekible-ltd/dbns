@@ -16,8 +16,8 @@ The spec (§28) pre-allocates this list — add new ADRs beyond ADR-020 as neede
 | ADR-003 | Custom binary document format | accepted |
 | ADR-004 | Page-oriented storage | accepted |
 | ADR-005 | B+Tree primary storage | accepted |
-| ADR-006 | WAL design | proposed |
-| ADR-007 | MVCC and transaction isolation | proposed |
+| ADR-006 | WAL design | accepted |
+| ADR-007 | MVCC and transaction isolation | accepted |
 | ADR-008 | Raft-based replication | proposed |
 | ADR-009 | Virtual shard architecture | proposed |
 | ADR-010 | Three replicas per shard | proposed |

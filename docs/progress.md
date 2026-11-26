@@ -60,11 +60,20 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       partial underflow (merge-on-empty only)
 
 ### Phase 3 — Transactions and recovery
-- [ ] WAL: append-only, checksums, LSN, rotation (spec §5.5)
-- [ ] Transaction manager: begin/commit/rollback (spec §7.1)
-- [ ] MVCC + snapshot isolation (spec §5.7)
-- [ ] Checkpointing + WAL retirement (spec §5.6)
-- [ ] Crash recovery — forced-termination tests (spec §22.3)
+- [x] WAL: segmented append-only log `wal/{seq}.ndbwal`, per-record len+CRC32
+      framing, torn-tail truncation, rotation + retirement (spec §5.5, ADR-006)
+- [x] Pool journaling hooks: before/after page images on write-guard drop,
+      WAL flush gate before dirty write-back (ADR-006)
+- [x] Transaction manager: begin/commit/rollback, serialized writers,
+      catalog page (root + commit_seq), txn timeouts (spec §7.1, ADR-007)
+- [x] MVCC + snapshot isolation: versioned leaf values, uncommitted-head
+      ownership, inline GC at commit horizon (spec §5.7, ADR-007)
+- [x] Checkpointing + WAL retirement (spec §5.6)
+- [x] Crash recovery: undo uncommitted before-images, redo committed
+      after-images; tests cover kill-before-flush and crash-during-checkpoint
+      boundaries (spec §22.3)
+- [~] Remaining §22.3 boundaries (kill during WAL append / page write),
+      torn-commit atomicity on commit_inner failure
 
 ### Phase 4 — Database functionality
 - [ ] Database/collection managers (spec §2.1)
