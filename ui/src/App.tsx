@@ -78,8 +78,11 @@ function DataBrowser() {
   );
   const [docs, setDocs] = useState<any[] | null>(null);
   const [err, setErr] = useState('');
+  const [notice, setNotice] = useState('');
   const [newDb, setNewDb] = useState('');
   const [newColl, setNewColl] = useState('');
+  const [editor, setEditor] = useState('{\n  "name": "",\n}');
+  const [editing, setEditing] = useState<number | null>(null);
 
   const browse = async () => {
     setErr('');
@@ -87,6 +90,40 @@ function DataBrowser() {
       const j = await api.post(`/collections/${db}/${coll}/query`, { filter: {}, limit: 50 });
       setDocs(j.docs ?? []);
     } catch (e) { setErr(String(e)); setDocs(null); }
+  };
+
+  const submitDoc = async () => {
+    setErr(''); setNotice('');
+    let body: unknown;
+    try { body = JSON.parse(editor); } catch { setErr('invalid JSON'); return; }
+    try {
+      if (editing === null) {
+        const j = await api.post(`/collections/${db}/${coll}/documents`, body);
+        setNotice(`inserted _id ${j._id}`);
+      } else {
+        await api.put(`/collections/${db}/${coll}/documents/${editing}`, body);
+        setNotice(`replaced _id ${editing}`);
+        setEditing(null);
+      }
+      await browse();
+    } catch (e) { setErr(String(e)); }
+  };
+
+  const editDoc = (d: any) => {
+    const { _id, ...rest } = d;
+    setEditing(_id ?? null);
+    setEditor(JSON.stringify(rest, null, 2));
+    setErr(''); setNotice('');
+  };
+
+  const deleteDoc = async (id: number) => {
+    setErr(''); setNotice('');
+    try {
+      await api.del(`/collections/${db}/${coll}/documents/${id}`);
+      setNotice(`deleted _id ${id}`);
+      if (editing === id) setEditing(null);
+      await browse();
+    } catch (e) { setErr(String(e)); }
   };
 
   return (
@@ -116,19 +153,45 @@ function DataBrowser() {
         </tbody>
       </table>
       {coll && <button className="act" onClick={browse}>Browse {db}/{coll}</button>}
+
+      {coll && (
+        <div className="card">
+          <h2 style={{ marginTop: 0 }}>{editing === null ? 'Add document' : `Edit document _id ${editing}`}</h2>
+          <textarea value={editor} onChange={(e) => setEditor(e.target.value)} spellCheck={false} />
+          <div>
+            <button className="act" onClick={submitDoc}>
+              {editing === null ? 'Insert' : 'Save (replace)'}
+            </button>
+            {editing !== null && (
+              <button className="act" onClick={() => { setEditing(null); setEditor('{\n  "name": "",\n}'); }}>
+                Cancel edit
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {err && <p className="err">{err}</p>}
-      {docs && <Docs docs={docs} />}
+      {notice && <p className="ok">{notice}</p>}
+      {docs && <Docs docs={docs} onEdit={editDoc} onDelete={deleteDoc} />}
     </>
   );
 }
 
-function Docs({ docs }: { docs: any[] }) {
+function Docs({ docs, onEdit, onDelete }: { docs: any[]; onEdit: (d: any) => void; onDelete: (id: number) => void }) {
   return (
     <table>
-      <thead><tr><th>_id</th><th>document</th></tr></thead>
+      <thead><tr><th>_id</th><th>document</th><th></th></tr></thead>
       <tbody>
         {docs.map((d, i) => (
-          <tr key={d._id ?? i}><td>{d._id}</td><td><pre style={{ margin: 0 }}>{JSON.stringify(d)}</pre></td></tr>
+          <tr key={d._id ?? i}>
+            <td>{d._id}</td>
+            <td><pre style={{ margin: 0 }}>{JSON.stringify(d)}</pre></td>
+            <td style={{ whiteSpace: 'nowrap' }}>
+              <button className="act" onClick={() => onEdit(d)}>edit</button>
+              <button className="act danger" onClick={() => onDelete(d._id)}>del</button>
+            </td>
+          </tr>
         ))}
       </tbody>
     </table>
