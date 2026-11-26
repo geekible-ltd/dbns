@@ -14,7 +14,7 @@ replication (spec §1).
 The implementation language must provide fine-grained memory control for a
 buffer pool and bounded memory budgets, safe concurrency for the B+Tree and
 MVCC layers, and reliable cross-platform operation on Ubuntu Linux and
-Windows Server.
+Windows Server (production) and macOS (development platform).
 
 ## Alternatives considered
 

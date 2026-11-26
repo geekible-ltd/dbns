@@ -16,25 +16,48 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 - [x] Logging — `tracing` with structured/JSON output (spec §24)
 - [x] Metrics — Prometheus scrape endpoint via `metrics-exporter-prometheus`
       (spec §24; per-subsystem metrics defined but not yet emitted)
-- [x] CI pipeline — fmt, clippy, tests, release build on Ubuntu + Windows
-      (spec §26 P0 acceptance)
+- [x] CI pipeline — fmt, clippy, tests, release build on Ubuntu + Windows +
+      macOS (spec §26 P0 acceptance)
 - [x] ADR framework — `docs/adr/` template + index; ADR-001, ADR-002 written
       (spec §28)
 - [ ] Final architecture documentation beyond spec
 - [ ] Health endpoint (deferred — arrives with REST service, Phase 8)
 
 ### Phase 1 — Binary document storage
-- [ ] Binary document format encode/decode (spec §6)
-- [ ] Field dictionary (spec §6.4)
-- [ ] Schema definitions (spec §6)
-- [ ] Page manager: 16 KB versioned pages, header, checksums (spec §5.2)
-- [ ] File manager / extent-based allocation (spec §5.2)
+- [x] Binary document format encode/decode (spec §6 — `ndb-document::codec`:
+      versioned header, field directory, payload, CRC32, partial access via
+      `EncodedDocument`)
+- [x] Field dictionary (spec §6.4 — `ndb-document::FieldDictionary`: stable
+      append-only IDs, versioned persistence, no silent type changes)
+- [x] Schema definitions + validation (spec §6 — `ndb-document::Schema`,
+      flexible/strict modes)
+- [x] Page manager: versioned pages, 40-byte header, CRC32 checksums,
+      generation tracking (spec §5.2 — `ndb-page::PageManager`)
+- [x] File manager / extent-based allocation (spec §5.2 — `ndb-page` extent
+      growth over `ndb-storage::StorageFile` positioned I/O)
+- [~] Known Phase-1 limitations: free list + page generations are in-memory
+      only (freed pages leak on restart until Phase 2 meta management)
 
 ### Phase 2 — B+Tree engine
-- [ ] B+Tree: internal/leaf nodes, split, merge, redistribution (spec §5.3)
-- [ ] Cursors, ordered iterators, range scans, composite keys (spec §5.3)
-- [ ] Buffer pool with bounded memory + eviction (spec §5.4)
-- [ ] Concurrent access via latch-coupling (spec §5.3)
+- [x] B+Tree: internal/leaf nodes, split, merge (spec §5.3 —
+      `ndb-btree::node` slotted pages, `tree` split/merge; merge-on-empty
+      underflow policy, see ADR-005)
+- [x] Cursors, ordered iterators, range scans, composite keys (spec §5.3 —
+      `ndb-btree::cursor` latch-coupled leaf-chain iterator, `key`
+      order-preserving composite encoding, `tree::range`/`scan`/`seek`)
+- [x] Buffer pool with bounded memory + eviction (spec §5.4 —
+      `ndb-buffer::BufferPool`: fixed frames, clock eviction, dirty
+      write-back on evict, RAII pin guards, `try_fetch_write` for sibling
+      latches)
+- [x] Concurrent access via latch-coupling (spec §5.3 — pessimistic crabbing
+      with safe-child release, stale-root re-check, deferred page frees;
+      verified by threaded tests + `BTree::validate`)
+- [x] Acceptance: millions of operations (`--ignored` release test:
+      1M inserts+lookups with periodic validation), proptest oracle vs
+      `BTreeMap` (spec §22.2)
+- [~] Known Phase-2 limitations: oversized values rejected (no overflow
+      pages yet); free list still in-memory only; no redistribution at
+      partial underflow (merge-on-empty only)
 
 ### Phase 3 — Transactions and recovery
 - [ ] WAL: append-only, checksums, LSN, rotation (spec §5.5)
@@ -61,10 +84,13 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       (spec §4, §14)
 - [ ] Phase 10 — security: multi-tenancy, RBAC, TLS, encryption, audit
       (spec §17)
-- [ ] Phase 11 — hardening: rebalancing, backup automation, Windows
-      validation, large-dataset testing (spec §11? §18, §23)
+- [ ] Phase 11 — hardening: rebalancing, backup automation, Ubuntu and
+      Windows production validation, large-dataset testing (spec §18, §23)
 
 ## ADRs written (spec §28)
 - [x] ADR-001 Rust language
 - [x] ADR-002 Cargo workspace
-- [ ] ADR-003 through ADR-020 — write when each subsystem's design is finalised
+- [x] ADR-003 Binary document format
+- [x] ADR-004 Page-oriented storage
+- [x] ADR-005 B+Tree primary storage
+- [ ] ADR-006 through ADR-020 — write when each subsystem's design is finalised

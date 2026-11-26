@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 7829b3235ca03b2620cef8ff5e789d5a38b4a257baf03e3849d2b13f8c53618b # shrinks to doc = Document { id: DocumentId(0), fields: {"": Object([("0", Null), ("_", Null)]), "_": Null} }
+cc e1d90035a49d89443f07732dfaf6cc379befddab8a9368ea9c5f78469b8facad # shrinks to doc = Document { id: DocumentId(0), fields: {"": Object([("_", Null)]), "0": Object([("1", Null), ("_", Decimal(Decimal { mantissa: -153969283498118730731453050, scale: 19 }))])} }

@@ -9,10 +9,20 @@ architectural decisions. This file is a working summary, not a replacement.
 
 ## Current state
 
-Phase 0 scaffolding complete: Cargo workspace, `ndb-common` (errors, IDs,
-`FormatVersion`), `ndb-config` (validated versioned YAML), `ndb-server`
-(lifecycle, tracing, Prometheus endpoint), ADR framework, CI for Ubuntu +
-Windows. No storage/document code yet.
+Phase 2 complete (see `docs/progress.md`):
+- `ndb-buffer` — fixed-frame `BufferPool`, clock eviction, dirty write-back,
+  RAII read/write pin guards (`RwLock<Page>` per frame), `try_fetch_write`.
+- `ndb-btree` — slotted-page nodes, pessimistic latch-coupled `BTree`
+  (get/insert/delete/scan/range/seek), leaf-chain `Cursor`, composite `key`
+  encoding, `validate()` invariants. ADR-005.
+- `ndb-document` — binary codec (header/directory/payload/CRC32), partial
+  field access, `FieldDictionary`, `Schema`. Wire format: `docs/adr/ADR-003`.
+- `ndb-page` — versioned pages, CRC32, extent-based `PageManager` over the
+  `PageIo` trait. ADR-004.
+- `ndb-storage` — `StorageFile` positioned I/O (pread/pwrite on Unix+macOS,
+  seek_read/write on Windows) implementing `PageIo`.
+- Phase 0 complete: workspace, `ndb-common`, `ndb-config`, `ndb-server`
+  lifecycle, ADRs, CI (Ubuntu + Windows + macOS).
 
 ## Progress tracking — REQUIRED
 
@@ -34,7 +44,9 @@ in `docs/progress.md`, organised by roadmap phase and spec section.
 - 3-node Raft cluster initially; architecture must scale to 100+ nodes
 - Targets: PK lookup P95 <5ms, search P95 <50ms, index visibility <5s,
   failover <30s, zero acknowledged-commit loss
-- Cross-platform: Ubuntu Linux and Windows Server — verify every change on both
+- Cross-platform: production targets are Ubuntu Linux and Windows Server;
+  macOS is the development platform — every change must build and test on
+  all three
 
 ## Non-negotiable architecture rules (spec §3.1, §19.2, §30)
 
@@ -108,8 +120,8 @@ indexes, do indexed lookups, and **recover from forced termination**.
 | Benchmarks | Criterion |
 
 Before adding any dependency: check maintenance status, licence, Windows +
-Linux compatibility, security history, performance. Prefer versions ≥7 days
-old; no floating `latest`/`*` ranges.
+Linux + macOS compatibility, security history, performance. Prefer versions
+≥7 days old; no floating `latest`/`*` ranges.
 
 ## Key design parameters (spec defaults — benchmark before finalizing)
 

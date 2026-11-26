@@ -5,3 +5,4 @@ edition.workspace = true
 
 [dependencies]
 ndb-common.workspace = true
+ndb-page = { path = "../ndb-page" }

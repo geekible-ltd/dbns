@@ -13,9 +13,9 @@ The spec (§28) pre-allocates this list — add new ADRs beyond ADR-020 as neede
 |-----|----------|--------|
 | ADR-001 | Rust as primary implementation language | accepted |
 | ADR-002 | Cargo workspace architecture | accepted |
-| ADR-003 | Custom binary document format | proposed |
-| ADR-004 | Page-oriented storage | proposed |
-| ADR-005 | B+Tree primary storage | proposed |
+| ADR-003 | Custom binary document format | accepted |
+| ADR-004 | Page-oriented storage | accepted |
+| ADR-005 | B+Tree primary storage | accepted |
 | ADR-006 | WAL design | proposed |
 | ADR-007 | MVCC and transaction isolation | proposed |
 | ADR-008 | Raft-based replication | proposed |

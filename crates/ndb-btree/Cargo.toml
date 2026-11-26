@@ -5,3 +5,8 @@ edition.workspace = true
 
 [dependencies]
 ndb-common.workspace = true
+ndb-buffer = { path = "../ndb-buffer" }
+ndb-page = { path = "../ndb-page" }
+
+[dev-dependencies]
+proptest.workspace = true

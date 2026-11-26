@@ -5,3 +5,7 @@ edition.workspace = true
 
 [dependencies]
 ndb-common.workspace = true
+crc32fast.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

@@ -3,7 +3,7 @@ Product Requirements, Software Architecture and Technical Development Specificat
 Document version: 1.0
 Status: Initial engineering specification
 Implementation language: Rust
-Target operating systems: Ubuntu Linux and Windows Server
+Target operating systems: Ubuntu Linux and Windows Server (production); macOS (development platform)
 Initial deployment: 3-node cluster
 Long-term scalability: 100+ servers
 Primary objective: High-performance distributed document database with integrated full-text, fuzzy, semantic and hybrid search.
@@ -27,7 +27,7 @@ Search visibility within five seconds of document commitment.
 Efficient memory utilisation.
 Horizontal scalability.
 Enterprise-grade security and multi-tenancy.
-Cross-platform operation on Linux and Windows.
+Cross-platform operation on Linux and Windows in production, with macOS supported as a development platform.
 1.1 Capacity and performance objectives
 Metric
 
@@ -87,7 +87,7 @@ NVMe SSD recommended
 
 Operating systems
 
-Ubuntu and Windows Server
+Ubuntu and Windows Server (production); macOS (development)
 
 Database consistency
 
@@ -1589,6 +1589,7 @@ Maintenance status.
 Licence.
 Windows compatibility.
 Linux compatibility.
+macOS compatibility.
 Security history.
 Performance characteristics.
 Long-term compatibility.
@@ -1878,7 +1879,7 @@ CI build and test pipelines.
 Cross-platform build verification.
 Acceptance:
 
-Clean builds on Ubuntu and Windows.
+Clean builds on Ubuntu, Windows and macOS.
 Workspace dependencies established.
 Automated tests running.
 Architecture documentation published.
@@ -2080,7 +2081,7 @@ Automatic rebalancing.
 Backup automation.
 Cluster administration.
 Operational monitoring.
-Windows production validation.
+Ubuntu and Windows production validation.
 Large dataset testing.
 Performance optimisation.
 Acceptance:
