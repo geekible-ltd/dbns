@@ -185,9 +185,36 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
       find/explain serialized behind the single-writer lock (131ms→16ms p50);
       optimizer plan cache serving stale literal predicates
 
-### Phases 9–11 (not started)
-- [ ] Phase 9 — distribution: Raft, sharding, failover, distributed query
-      (spec §4, §14)
+### Phase 9 — distribution (spec §4, §14) — work items
+- [ ] **P9-W1 Consensus substrate** (`ndb-raft`): openraft dependency (§4.2
+      blesses an established impl); RaftStorage adapter over our persistence
+      (log store + state machine); in-process + TCP transports; a
+      cluster-level Raft group replicating cluster metadata
+- [ ] **P9-W2 Cluster metadata + membership** (§4.4): ClusterMetadata state
+      machine (cluster id, node ids/addresses, health, shard membership,
+      leaders, replica placement, config + metadata versions); node
+      bootstrap/join/leave; health heartbeats; restart recovery
+- [ ] **P9-W3 Virtual shard model** (§4.3): consistent-hash vshard map
+      (256 default, configurable), hash/range/tenant partitioners,
+      placement vshard→replica-set, per-shard Raft groups + leader tracking
+- [ ] **P9-W4 Replicated write path** (§4.1–4.2): write → shard leader →
+      raft log → majority → apply into Engine txn; commit-index ↔
+      WAL/txn-seq coordination; idempotent apply; majority-ack semantics
+- [ ] **P9-W5 Distributed reads + coordinator** (§14): key→vshard→node
+      routing; scatter-gather find/aggregate/text/vector with local
+      push-down; compact candidate records; merge + global sort/top-K;
+      freshness metadata
+- [ ] **P9-W6 Membership + failover** (§4.1, §4.4): add/remove nodes via
+      Raft membership changes; failure detection → per-shard re-election;
+      kill tests — 1 replica lost: writes continue; 2 lost: writes block
+- [ ] **P9-W7 Rebalancing + shard transfer** (§4.5): incremental
+      snapshot+catch-up moves; explicit ownership transitions (no dual-
+      leader writes); resume interrupted transfers; throttling
+- [ ] **P9-W8 Distributed snapshots + cross-shard txns**: consistent
+      multi-shard read points, watermark/freshness metadata (§14);
+      cross-shard transaction scope documented + ADR'd (likely deferred)
+
+### Phases 10–11 (not started)
 - [ ] Phase 10 — security: multi-tenancy, RBAC, TLS, encryption, audit
       (spec §17)
 - [ ] Phase 11 — hardening: rebalancing, backup automation, Ubuntu and
