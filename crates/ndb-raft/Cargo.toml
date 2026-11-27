@@ -1,0 +1,26 @@
+[package]
+name = "ndb-raft"
+version = "0.1.0"
+edition = "2021"
+description = "Raft consensus substrate (spec §4.2) — openraft over NDB persistence"
+
+[dependencies]
+ndb-common = { path = "../ndb-common" }
+ndb-page = { path = "../ndb-page" }
+ndb-btree = { path = "../ndb-btree" }
+ndb-buffer = { path = "../ndb-buffer" }
+ndb-transaction = { path = "../ndb-transaction" }
+openraft = { version = "0.10.1", features = ["serde"] }
+tokio = { workspace = true, features = ["time", "net", "io-util"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+bincode = "1"
+async-trait = "0.1"
+futures = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+ndb-index = { path = "../ndb-index" }
+ndb-wal = { path = "../ndb-wal" }
+ndb-storage = { path = "../ndb-storage" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }

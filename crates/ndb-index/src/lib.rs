@@ -36,7 +36,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The database engine: catalog + collection managers over a [`TxnManager`].
 pub struct Engine<P: PageIo> {
-    txns: TxnManager<P>,
+    txns: Arc<TxnManager<P>>,
     pool: Arc<BufferPool<P>>,
     next_collection_id: AtomicU64,
     /// Live doc-id allocators keyed by catalog key — shared across the
@@ -54,7 +54,7 @@ impl<P: PageIo> Engine<P> {
         cfg: ndb_transaction::TxnConfig,
     ) -> ndb_common::Result<Self> {
         Ok(Self {
-            txns: TxnManager::create(Arc::clone(&pool), wal, cfg)?,
+            txns: Arc::new(TxnManager::create(Arc::clone(&pool), wal, cfg)?),
             pool,
             next_collection_id: AtomicU64::new(1),
             id_allocs: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -68,7 +68,7 @@ impl<P: PageIo> Engine<P> {
         wal: Arc<ndb_wal::Wal>,
         cfg: ndb_transaction::TxnConfig,
     ) -> ndb_common::Result<Self> {
-        let txns = TxnManager::open(Arc::clone(&pool), wal, cfg)?;
+        let txns = Arc::new(TxnManager::open(Arc::clone(&pool), wal, cfg)?);
         // Collection ids must not collide with surviving ones: seed past
         // the largest id found in the catalog.
         let mut max_id = 0u64;
@@ -98,6 +98,11 @@ impl<P: PageIo> Engine<P> {
 
     pub fn txns(&self) -> &TxnManager<P> {
         &self.txns
+    }
+
+    /// Shared handle for subsystems that co-own the manager (ndb-raft).
+    pub fn txns_arc(&self) -> Arc<TxnManager<P>> {
+        Arc::clone(&self.txns)
     }
 
     /// Checkpoint — flushes dirty pages and retires WAL segments.
