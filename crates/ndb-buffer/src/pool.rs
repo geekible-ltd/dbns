@@ -110,7 +110,11 @@ impl<P: PageIo> BufferPool<P> {
 
     /// Page size in bytes.
     pub fn page_size(&self) -> u32 {
-        self.inner.mgr.lock().unwrap().page_size()
+        self.inner
+            .mgr
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+            .page_size()
     }
 
     /// Number of frames in the pool.
@@ -146,22 +150,46 @@ impl<P: PageIo> BufferPool<P> {
     }
 
     pub fn resident_pages(&self) -> usize {
-        self.inner.shared.state.lock().unwrap().table.len()
+        self.inner
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+            .table
+            .len()
     }
 
     /// Allocates a new page. The initial content is written through the
     /// allocator; subsequent modifications must go through `fetch_write` so
     /// the cached copy stays consistent.
     pub fn allocate_page(&self, page_type: PageType) -> ndb_common::Result<PageId> {
-        Ok(self.inner.mgr.lock().unwrap().allocate_page(page_type)?.0)
+        Ok(self
+            .inner
+            .mgr
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+            .allocate_page(page_type)?
+            .0)
     }
 
     /// Frees a page. It must not be pinned; the frame copy (if resident) is
     /// dropped before the free so stale bytes can't be served.
     pub fn free_page(&self, id: PageId) -> ndb_common::Result<()> {
-        let frame = self.inner.shared.state.lock().unwrap().table.remove(&id);
+        let frame = self
+            .inner
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+            .table
+            .remove(&id);
         if let Some(frame) = frame {
-            let pinned = frame.meta.lock().unwrap().pin_count > 0;
+            let pinned = frame
+                .meta
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+                .pin_count
+                > 0;
             if pinned {
                 // Re-insert before erroring.
                 self.inner
@@ -174,9 +202,13 @@ impl<P: PageIo> BufferPool<P> {
                 return Err(Error::InvalidInput(format!("cannot free pinned page {id}")));
             }
             *frame.page.write().unwrap() = Page::new(self.page_size());
-            *frame.meta.lock().unwrap() = FrameMeta::default();
+            *frame.meta.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */ = FrameMeta::default();
         }
-        self.inner.mgr.lock().unwrap().free_page(id)
+        self.inner
+            .mgr
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+            .free_page(id)
     }
 
     /// Fetches `id` with a read latch. Loads from disk on a miss, evicting a
@@ -204,7 +236,11 @@ impl<P: PageIo> BufferPool<P> {
                 return Ok(None);
             }
         };
-        frame.meta.lock().unwrap().dirty = true;
+        frame
+            .meta
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+            .dirty = true;
         let hook = self.page_hook();
         let before = hook.as_ref().map(|_| g.as_bytes().to_vec());
         let guard = unsafe { force_static_write(g) };
@@ -221,7 +257,11 @@ impl<P: PageIo> BufferPool<P> {
     /// conservative choice; clean write-outs are cheap.
     pub fn fetch_write(&self, id: PageId) -> ndb_common::Result<PageWriteGuard> {
         let frame = self.pin(id)?;
-        frame.meta.lock().unwrap().dirty = true;
+        frame
+            .meta
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+            .dirty = true;
         let g = frame.page.write().unwrap();
         let hook = self.page_hook();
         let before = hook.as_ref().map(|_| g.as_bytes().to_vec());
@@ -238,22 +278,31 @@ impl<P: PageIo> BufferPool<P> {
     /// Installs the journaling hook invoked when a write-latched page is
     /// released with modified bytes (ADR-006).
     pub fn set_page_hook(&self, hook: Option<Arc<PageHook>>) {
-        *self.inner.page_hook.lock().unwrap() = hook;
+        *self.inner.page_hook.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */ = hook;
     }
 
     /// Installs the WAL-before-data gate consulted before writing any dirty
     /// page to the data file.
     pub fn set_flush_gate(&self, gate: Option<Arc<FlushGate>>) {
-        *self.inner.flush_gate.lock().unwrap() = gate;
+        *self.inner.flush_gate.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */ = gate;
     }
 
     fn page_hook(&self) -> Option<Arc<PageHook>> {
-        self.inner.page_hook.lock().unwrap().clone()
+        self.inner
+            .page_hook
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+            .clone()
     }
 
     /// Runs the flush gate for a page about to be written back.
     fn gate(&self, page: &Page) -> ndb_common::Result<()> {
-        let gate = self.inner.flush_gate.lock().unwrap().clone();
+        let gate = self
+            .inner
+            .flush_gate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+            .clone();
         if let (Some(gate), Ok(h)) = (gate, page.header()) {
             gate(h.lsn.get())?;
         }
@@ -273,15 +322,24 @@ impl<P: PageIo> BufferPool<P> {
             .unwrap()
             .table
             .iter()
-            .filter(|(_, f)| f.meta.lock().unwrap().dirty)
+            .filter(|(_, f)| {
+                f.meta
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+                    .dirty
+            })
             .map(|(id, f)| (*id, Arc::clone(f)))
             .collect();
-        let mut mgr = self.inner.mgr.lock().unwrap();
+        let mut mgr = self.inner.mgr.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */;
         for (_id, frame) in dirty {
             let mut page = frame.page.write().unwrap();
             self.gate(&page)?;
             mgr.write_page(&mut page)?;
-            frame.meta.lock().unwrap().dirty = false;
+            frame
+                .meta
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+                .dirty = false;
         }
         mgr.sync()
     }
@@ -290,9 +348,9 @@ impl<P: PageIo> BufferPool<P> {
     fn pin(&self, id: PageId) -> ndb_common::Result<Arc<Frame>> {
         let shared = &self.inner.shared;
         {
-            let state = shared.state.lock().unwrap();
+            let state = shared.state.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */;
             if let Some(frame) = state.table.get(&id) {
-                let mut meta = frame.meta.lock().unwrap();
+                let mut meta = frame.meta.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */;
                 meta.pin_count += 1;
                 meta.referenced = true;
                 return Ok(Arc::clone(frame));
@@ -300,23 +358,27 @@ impl<P: PageIo> BufferPool<P> {
         }
 
         // Miss: pick a victim frame under the state lock.
-        let mut state = shared.state.lock().unwrap();
+        let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */;
         let frame = self.evict_candidate(&mut state)?;
         shared
             .evictions
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut meta = frame.meta.lock().unwrap();
+        let mut meta = frame.meta.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */;
         // If the victim holds a page, flush it out.
         if let Some(old_id) = meta.page_id.take() {
             let mut page = frame.page.write().unwrap();
             if meta.dirty {
                 self.gate(&page)?;
-                self.inner.mgr.lock().unwrap().write_page(&mut page)?;
+                self.inner
+                    .mgr
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+                    .write_page(&mut page)?;
             }
             state.table.remove(&old_id);
         }
         // Load the requested page into the frame.
-        let mut mgr = self.inner.mgr.lock().unwrap();
+        let mut mgr = self.inner.mgr.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */;
         shared
             .fetches
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -342,7 +404,7 @@ impl<P: PageIo> BufferPool<P> {
             let idx = state.clock_hand % n;
             state.clock_hand += 1;
             let frame = &frames[idx];
-            let mut meta = frame.meta.lock().unwrap();
+            let mut meta = frame.meta.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */;
             if meta.pin_count > 0 {
                 continue;
             }
@@ -372,7 +434,7 @@ unsafe fn force_static_write(g: RwLockWriteGuard<'_, Page>) -> RwLockWriteGuard<
 }
 
 fn unpin(frame: &Arc<Frame>) {
-    let mut meta = frame.meta.lock().unwrap();
+    let mut meta = frame.meta.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */;
     debug_assert!(meta.pin_count > 0);
     meta.pin_count = meta.pin_count.saturating_sub(1);
 }
@@ -432,7 +494,12 @@ impl Drop for PageWriteGuard {
         {
             self.guard.refresh_checksum();
             let after = self.guard.as_bytes();
-            let id = self.frame.meta.lock().unwrap().page_id;
+            let id = self
+                .frame
+                .meta
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+                .page_id;
             if let Some(id) = id {
                 let lsn = hook(id, before, after);
                 if let Ok(mut h) = self.guard.header() {

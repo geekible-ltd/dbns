@@ -9,6 +9,7 @@ ndb-document = { path = "../ndb-document" }
 ndb-index = { path = "../ndb-index" }
 ndb-aggregation = { path = "../ndb-aggregation" }
 ndb-query-executor = { path = "../ndb-query-executor" }
+ndb-stress = { path = "../ndb-stress" }
 ndb-hybrid = { path = "../ndb-hybrid" }
 ndb-vector = { path = "../ndb-vector" }
 ndb-hnsw = { path = "../ndb-hnsw" }

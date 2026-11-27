@@ -173,6 +173,18 @@ Legend: `[x]` done · `[~]` partial · `[ ]` not started
 - [~] TLS termination (§16.4), API keys/RBAC (Phase 10), gRPC reflection,
       streaming query results, SDK retry/pooling config
 
+#### Stress runner (§22 perf support)
+- [x] `ndb-stress`: weighted-mix workload generator driving the node's own
+      gRPC listener via a real tonic client (HTTP/2 + prost incl.); seed
+      phase (db/collection/text+vector index/bulk_insert), 8 op kinds,
+      log-bucketed latency histograms (p50/p95/p99), miss vs error split
+- [x] REST: `POST/GET /admin/stress`, `POST /admin/stress/stop` (§15.7)
+- [x] UI "Stress test" panel: config form, live 1s polling, per-op table
+- Bugs it found + fixed: postings panic on out-of-order re-indexed doc
+      (sorted merge-rewrite); mutex-poison cascade killing all writes;
+      find/explain serialized behind the single-writer lock (131ms→16ms p50);
+      optimizer plan cache serving stale literal predicates
+
 ### Phases 9–11 (not started)
 - [ ] Phase 9 — distribution: Raft, sharding, failover, distributed query
       (spec §4, §14)

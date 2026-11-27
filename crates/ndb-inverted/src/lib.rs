@@ -99,6 +99,22 @@ fn encode_chain(ids: &[PageId]) -> Vec<u8> {
     v
 }
 
+/// `last_doc` of a chain's tail chunk without decoding the whole chain.
+fn tail_last_doc<P: PageIo>(
+    txn: &Transaction<'_, P>,
+    pool: &Arc<BufferPool<P>>,
+    ids: &[PageId],
+) -> ndb_common::Result<u64> {
+    let Some(&last) = ids.last() else {
+        return Ok(0);
+    };
+    let _ = txn;
+    let g = pool.fetch_read(last)?;
+    let last_doc = Chunk::decode(g.page().body()).map(|c| c.last_doc());
+    drop(g);
+    last_doc
+}
+
 fn decode_chain(buf: &[u8]) -> ndb_common::Result<Vec<PageId>> {
     if buf.len() < 2 {
         return Err(Error::Corruption("chain: truncated".into()));
@@ -365,6 +381,20 @@ impl InvertedIndex {
             .map(|b| decode_chain(&b))
             .transpose()?
             .unwrap_or_default();
+
+        // Out-of-order append (doc re-indexed after an update put higher
+        // ids in the tail): postings must stay doc_id-sorted for delta
+        // encoding + intersections — merge into place and rewrite the
+        // whole chain, the same path remove_document uses.
+        if !ids.is_empty() && p.doc_id < tail_last_doc(txn, pool, &ids)? {
+            let mut all = Self::postings(txn, pool, index_tree, field_id, term)?;
+            all.retain(|q| q.doc_id != p.doc_id); // defensive dedupe
+            let pos = all.partition_point(|q| q.doc_id < p.doc_id);
+            all.insert(pos, p);
+            let ids = Self::write_chunks(txn, pool, &all)?;
+            txn.insert_in(index_tree, &key, &encode_chain(&ids))?;
+            return Ok(());
+        }
 
         // Read the current tail chunk (if any) and try appending.
         let mut tail = if let Some(&last) = ids.last() {

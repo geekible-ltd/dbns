@@ -48,7 +48,7 @@ impl Journal {
 
     /// Invoked by the pool on write-guard drop; returns the record LSN.
     fn record(&self, page_id: PageId, before: &[u8], after: &[u8]) -> u64 {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */;
         if st.err.is_some() {
             return 0; // already failed; ops will surface the error
         }
@@ -71,12 +71,21 @@ impl Journal {
 
     /// Marks `txn` as the active write transaction (or clears it).
     pub fn set_active(&self, txn: Option<TransactionId>) {
-        self.state.lock().unwrap().active = txn;
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+            .active = txn;
     }
 
     /// Surfaces a stashed WAL error, if any, and clears it.
     pub fn check_err(&self) -> ndb_common::Result<()> {
-        match self.state.lock().unwrap().err.take() {
+        match self
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+            .err
+            .take()
+        {
             Some(e) => Err(e),
             None => Ok(()),
         }
@@ -87,6 +96,9 @@ impl Journal {
     /// without needing a fault-injecting filesystem.
     #[doc(hidden)]
     pub fn inject_error(&self, e: Error) {
-        self.state.lock().unwrap().err = Some(e);
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+            .err = Some(e);
     }
 }

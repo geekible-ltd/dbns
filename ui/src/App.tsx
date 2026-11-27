@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
 
-type Nav = 'overview' | 'data' | 'query' | 'indexes' | 'admin';
+type Nav = 'overview' | 'data' | 'query' | 'indexes' | 'stress' | 'admin';
 
 export default function App() {
   const [nav, setNav] = useState<Nav>('overview');
@@ -9,9 +9,9 @@ export default function App() {
     <>
       <nav>
         <h1>NDB</h1>
-        {(['overview', 'data', 'query', 'indexes', 'admin'] as Nav[]).map((n) => (
+        {(['overview', 'data', 'query', 'indexes', 'stress', 'admin'] as Nav[]).map((n) => (
           <button key={n} className={nav === n ? 'on' : ''} onClick={() => setNav(n)}>
-            {n === 'data' ? 'Data browser' : n === 'query' ? 'Query console' : n.charAt(0).toUpperCase() + n.slice(1)}
+            {n === 'data' ? 'Data browser' : n === 'query' ? 'Query console' : n === 'stress' ? 'Stress test' : n.charAt(0).toUpperCase() + n.slice(1)}
           </button>
         ))}
       </nav>
@@ -20,6 +20,7 @@ export default function App() {
         {nav === 'data' && <DataBrowser />}
         {nav === 'query' && <QueryConsole />}
         {nav === 'indexes' && <IndexAdmin />}
+        {nav === 'stress' && <StressPanel />}
         {nav === 'admin' && <Admin />}
       </main>
     </>
@@ -319,6 +320,129 @@ function Admin() {
       {(['metrics', 'storage', 'txn', 'info', 'config'] as const).map((k) => (
         <div key={k} className="card"><h2 style={{ marginTop: 0 }}>{k}</h2><pre>{JSON.stringify((j as any)[k], null, 2)}</pre></div>
       ))}
+    </>
+  );
+}
+
+// ---- Stress test ----------------------------------------------------------
+// Drives a run on the server's own gRPC listener (full HTTP/2 + prost path)
+// via POST /admin/stress; polls GET /admin/stress for live per-op
+// throughput + log-bucketed latency percentiles.
+
+const OP_KEYS = ['insert', 'read', 'update', 'delete', 'find', 'text', 'vector', 'hybrid'] as const;
+const DEFAULT_MIX: Record<string, number> = { insert: 10, read: 30, update: 10, delete: 5, find: 20, text: 10, vector: 10, hybrid: 5 };
+
+function StressPanel() {
+  const [workers, setWorkers] = useState(8);
+  const [duration, setDuration] = useState(30);
+  const [seed, setSeed] = useState(1000);
+  const [mix, setMix] = useState<Record<string, number>>({ ...DEFAULT_MIX });
+  const [snap, setSnap] = useState<any>(null);
+  const [err, setErr] = useState('');
+
+  const running = snap && ['connecting', 'seeding', 'running'].includes(snap.phase);
+
+  const poll = async () => {
+    try { setSnap(await api.get('/admin/stress')); } catch (e) { setErr(String(e)); }
+  };
+  useEffect(() => {
+    poll();
+    if (!running) return;
+    const t = setInterval(poll, 1000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running]);
+
+  const start = async () => {
+    setErr('');
+    try {
+      setSnap(await api.post('/admin/stress', {
+        workers, duration_secs: duration, seed_docs: seed, mix,
+      }));
+    } catch (e) { setErr(String(e)); }
+  };
+  const stop = async () => {
+    try { await api.post('/admin/stress/stop', {}); } catch (e) { setErr(String(e)); }
+    await poll();
+  };
+
+  const rows: [string, any][] = snap?.ops ? Object.entries(snap.ops) : [];
+  const maxOps = Math.max(1, ...rows.map(([, s]) => s.ops_per_sec ?? 0));
+
+  return (
+    <>
+      <h2>Stress test <span className="lbl">— over the node&rsquo;s own gRPC listener</span></h2>
+      <div className="card">
+        {(['workers', 'duration (s)', 'seed docs'] as const).map((lbl, i) => {
+          const [v, sv] = [workers, duration, seed][i] !== undefined
+            ? [[workers, setWorkers], [duration, setDuration], [seed, setSeed]][i] as [number, (n: number) => void]
+            : [0, () => {}];
+          return (
+            <span key={lbl} style={{ marginRight: 16 }}>
+              <span className="lbl">{lbl} </span>
+              <input type="number" value={v} style={{ width: 80 }}
+                onChange={(e) => sv(Number(e.target.value))} />
+            </span>
+          );
+        })}
+      </div>
+      <div className="card">
+        <div className="lbl" style={{ marginBottom: 6 }}>op mix (weights — 0 disables)</div>
+        {OP_KEYS.map((k) => (
+          <span key={k} style={{ marginRight: 14 }}>
+            <span className="lbl">{k} </span>
+            <input type="number" value={mix[k]} style={{ width: 60 }}
+              onChange={(e) => setMix({ ...mix, [k]: Number(e.target.value) })} />
+          </span>
+        ))}
+      </div>
+      <div>
+        <button className="act" onClick={start} disabled={!!running}>Start</button>
+        <button className="act danger" onClick={stop} disabled={!running}>Stop</button>
+        <button className="act" onClick={poll}>Refresh</button>
+      </div>
+      {err && <p className="err">{err}</p>}
+
+      {snap && snap.phase !== 'idle' && (
+        <>
+          <div className="card">
+            <span className={running ? 'ok' : ''}>
+              phase: <b>{snap.phase}</b> · elapsed {snap.elapsed_secs}s · total {snap.total_ops} ops
+              {snap.total_errors ? ` · ${snap.total_errors} errors` : ''}
+            </span>
+            {snap.failure && <p className="err">{snap.failure}</p>}
+            {snap.last_error && <p className="err">last error: {snap.last_error}</p>}
+          </div>
+          <table>
+            <thead><tr>
+              <th>op</th><th>count</th><th>errors</th><th>misses</th>
+              <th>ops/s</th><th>avg ms</th><th>p50</th><th>p95</th><th>p99</th><th>max</th><th></th>
+            </tr></thead>
+            <tbody>
+              {rows.map(([op, s]) => (
+                <tr key={op}>
+                  <td>{op}</td>
+                  <td>{s.count}</td>
+                  <td className={s.errors ? 'err' : ''}>{s.errors}</td>
+                  <td>{s.misses}</td>
+                  <td>{s.ops_per_sec}</td>
+                  <td>{s.avg_ms?.toFixed?.(2) ?? s.avg_ms}</td>
+                  <td>{s.p50_ms}</td>
+                  <td>{s.p95_ms}</td>
+                  <td>{s.p99_ms}</td>
+                  <td>{s.max_ms}</td>
+                  <td style={{ width: '30%' }}>
+                    <div style={{ background: '#1f5fbf', height: 8, borderRadius: 3,
+                      width: `${((s.ops_per_sec ?? 0) / maxOps) * 100}%` }} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="lbl">latency in ms (log-bucketed histogram upper bounds); misses = get/update/delete on already-deleted ids (real work, expected NotFound)</p>
+        </>
+      )}
+      {(!snap || snap.phase === 'idle') && <p className="lbl">no run yet — configure the mix and hit Start</p>}
     </>
   );
 }

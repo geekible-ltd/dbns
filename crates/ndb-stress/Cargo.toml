@@ -1,0 +1,13 @@
+[package]
+name = "ndb-stress"
+version = "0.1.0"
+edition = "2021"
+description = "Workload generator + stats for NDB stress runs (drives the gRPC surface)"
+
+[dependencies]
+ndb-grpc = { path = "../ndb-grpc" }
+ndb-common = { path = "../ndb-common" }
+tonic = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+tokio-stream = { workspace = true }
+serde_json = { workspace = true }

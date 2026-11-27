@@ -150,7 +150,7 @@ impl Wal {
     /// Appends `record` under `txn` and returns its LSN. Buffered — call
     /// [`Wal::flush`] before acknowledging durability.
     pub fn append(&self, txn: TransactionId, record: WalRecord) -> ndb_common::Result<Lsn> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */;
         let lsn = inner.next_lsn;
         let bytes = record.encode(Lsn::new(lsn), txn);
         inner.tail.append(&bytes)?;
@@ -171,7 +171,7 @@ impl Wal {
 
     /// fsyncs the tail segment and returns the highest durable LSN.
     pub fn flush(&self) -> ndb_common::Result<Lsn> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */;
         inner.tail.sync()?;
         inner.durable_lsn = inner.next_lsn - 1;
         Ok(Lsn::new(inner.durable_lsn))
@@ -181,7 +181,13 @@ impl Wal {
     /// durable. The buffer pool's flush gate calls this before writing a
     /// dirty page stamped with `lsn` (WAL-before-data rule).
     pub fn flush_to(&self, lsn: Lsn) -> ndb_common::Result<()> {
-        if lsn.get() <= self.inner.lock().unwrap().durable_lsn {
+        if lsn.get()
+            <= self
+                .inner
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+                .durable_lsn
+        {
             return Ok(());
         }
         self.flush()?;
@@ -190,14 +196,19 @@ impl Wal {
 
     /// Current highest durable LSN.
     pub fn durable_lsn(&self) -> Lsn {
-        Lsn::new(self.inner.lock().unwrap().durable_lsn)
+        Lsn::new(
+            self.inner
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+                .durable_lsn,
+        )
     }
 
     /// Deletes segments whose records all precede the checkpoint LSN. Safe
     /// because every page update at or below the checkpoint has been synced
     /// to the data file (spec §5.6).
     pub fn retire_before(&self, checkpoint_lsn: Lsn) -> ndb_common::Result<usize> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */;
         let tail_seq = inner.tail.seq;
         let mut removed = 0;
         for (seq, path) in list_segments(&self.dir)? {

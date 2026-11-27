@@ -406,7 +406,8 @@ impl<P: PageIo + Send + Sync + 'static> SearchService for SearchSvc<P> {
             .ok_or_else(|| Status::invalid_argument("query must be object"))?;
         o.insert("database".into(), J::String(req.database));
         o.insert("collection".into(), J::String(req.collection));
-        let mut txn = self.0.engine.txns().begin_write().map_err(to_status)?;
+        // Pure read — a snapshot txn, not the serialized write slot.
+        let mut txn = self.0.engine.txns().begin().map_err(to_status)?;
         let res = self
             .0
             .qe
@@ -586,7 +587,7 @@ impl<P: PageIo + Send + Sync + 'static> SearchService for SearchSvc<P> {
             .ok_or_else(|| Status::invalid_argument("query must be object"))?;
         o.insert("database".into(), J::String(req.database));
         o.insert("collection".into(), J::String(req.collection));
-        let mut txn = self.0.engine.txns().begin_write().map_err(to_status)?;
+        let mut txn = self.0.engine.txns().begin().map_err(to_status)?;
         let plan = self
             .0
             .qe

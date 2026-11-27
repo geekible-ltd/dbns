@@ -171,7 +171,7 @@ impl<P: PageIo> TxnManager<P> {
     /// Begins a write transaction — serialized: blocks until any current
     /// writer finishes (ADR-007 Phase-3 policy).
     pub fn begin_write(&self) -> ndb_common::Result<Transaction<'_, P>> {
-        let guard = self.write_lock.lock().unwrap();
+        let guard = self.write_lock.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */;
         let id = self.alloc_txn();
         let seq = self.register_snapshot(id);
         self.journal.set_active(Some(id));
@@ -195,7 +195,7 @@ impl<P: PageIo> TxnManager<P> {
     /// horizon can never exclude a snapshot it already promised (i.e.
     /// readers either pin the horizon or see the post-commit state).
     fn register_snapshot(&self, id: TransactionId) -> CommitSequence {
-        let mut snaps = self.snapshots.lock().unwrap();
+        let mut snaps = self.snapshots.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */;
         let seq = self.commit_seq.load(Ordering::SeqCst);
         snaps.insert(
             id,
@@ -208,7 +208,10 @@ impl<P: PageIo> TxnManager<P> {
     }
 
     fn unregister(&self, id: TransactionId) {
-        self.snapshots.lock().unwrap().remove(&id);
+        self.snapshots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+            .remove(&id);
     }
 
     /// The GC horizon computed inside the snapshots lock: the oldest live
@@ -239,11 +242,14 @@ impl<P: PageIo> TxnManager<P> {
 
     /// Open snapshot count — active readers + writers (§15.7).
     pub fn active_transactions(&self) -> usize {
-        self.snapshots.lock().unwrap().len()
+        self.snapshots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+            .len()
     }
 
     pub fn oldest_snapshot_age(&self) -> Option<Duration> {
-        let snaps = self.snapshots.lock().unwrap();
+        let snaps = self.snapshots.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */;
         let now = Instant::now();
         snaps
             .values()
@@ -259,7 +265,7 @@ impl<P: PageIo> TxnManager<P> {
     /// flushes dirty pages (each gated by WAL-before-data), syncs the data
     /// file, then retires fully-covered WAL segments.
     pub fn checkpoint(&self) -> ndb_common::Result<()> {
-        let _w = self.write_lock.lock().unwrap();
+        let _w = self.write_lock.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */;
         let durable = self.wal.durable_lsn();
         self.wal
             .append(SYSTEM_TXN, WalRecord::Checkpoint { lsn: durable })?;
@@ -457,7 +463,7 @@ impl<'m, P: PageIo> Transaction<'m, P> {
             // land between (a stale seq on already-GC'd chains). Stamped
             // versions are only resolvable at seq, stored last, so commit
             // is atomically visible (ADR-007).
-            let snaps = self.mgr.snapshots.lock().unwrap();
+            let snaps = self.mgr.snapshots.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */;
             let horizon = TxnManager::<P>::gc_horizon_locked(
                 &snaps,
                 self.mgr.commit_seq.load(Ordering::SeqCst),

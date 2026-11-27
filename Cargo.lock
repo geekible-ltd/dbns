@@ -1326,6 +1326,7 @@ dependencies = [
  "ndb-index",
  "ndb-page",
  "ndb-query-executor",
+ "ndb-stress",
  "ndb-transaction",
  "ndb-vector",
  "ndb-wal",
@@ -1372,6 +1373,18 @@ version = "0.1.0"
 dependencies = [
  "ndb-common",
  "ndb-page",
+]
+
+[[package]]
+name = "ndb-stress"
+version = "0.1.0"
+dependencies = [
+ "ndb-common",
+ "ndb-grpc",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tonic",
 ]
 
 [[package]]

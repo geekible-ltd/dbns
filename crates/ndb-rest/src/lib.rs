@@ -32,6 +32,12 @@ pub struct AppState<P: PageIo> {
     /// redacted before serialisation.
     pub config: Mutex<Option<serde_yaml::Value>>,
     pub started: std::time::Instant,
+    /// gRPC dial target for the stress runner (`http://127.0.0.1:{port}`),
+    /// set by `ndb-server` at boot — the stress panel drives the real gRPC
+    /// listener so timings include transport + prost codec.
+    pub grpc_target: Mutex<Option<String>>,
+    /// At most one stress run at a time.
+    pub stress: Mutex<Option<Arc<ndb_stress::StressHandle>>>,
 }
 
 impl<P: PageIo> AppState<P> {
@@ -42,6 +48,8 @@ impl<P: PageIo> AppState<P> {
             auth: Arc::new(auth::AuthConfig::default()),
             config: Mutex::new(None),
             started: std::time::Instant::now(),
+            grpc_target: Mutex::new(None),
+            stress: Mutex::new(None),
         }
     }
 }
@@ -125,6 +133,11 @@ where
         .route("/cluster/status", get(cluster_status::<P>))
         // admin (§15.7)
         .route("/admin/metrics", get(admin_metrics::<P>))
+        .route(
+            "/admin/stress",
+            post(stress_start::<P>).get(stress_status::<P>),
+        )
+        .route("/admin/stress/stop", post(stress_stop::<P>))
         .route("/admin/config", get(admin_config::<P>))
         .route("/admin/storage", get(admin_storage::<P>))
         .route("/admin/txn", get(admin_txn::<P>))
@@ -714,7 +727,7 @@ async fn explain<P: PageIo>(
     Json(body): Json<J>,
 ) -> ApiResult<Json<J>> {
     let query = query_with_coll(&body, &db, &coll)?;
-    let mut txn = st.engine.txns().begin_write().map_err(ApiError::from)?;
+    let mut txn = st.engine.txns().begin().map_err(ApiError::from)?;
     let plan = st
         .qe
         .explain(&st.engine, &mut txn, &query.to_string())
@@ -732,7 +745,9 @@ async fn find<P: PageIo>(
     Json(body): Json<J>,
 ) -> ApiResult<Json<J>> {
     let query = query_with_coll(&body, &db, &coll)?;
-    let mut txn = st.engine.txns().begin_write().map_err(ApiError::from)?;
+    // Pure read — snapshot txn; begin_write would serialize queries
+    // behind the single-writer lock for no benefit.
+    let mut txn = st.engine.txns().begin().map_err(ApiError::from)?;
     let r = st
         .qe
         .find(
@@ -1069,4 +1084,54 @@ async fn admin_info<P: PageIo>(State(st): State<Arc<AppState<P>>>) -> ApiResult<
                      "aggregation", "mvcc", "rest"],
         "build": { "rustc": "stable", "profile": "debug-or-release" },
     })))
+}
+
+// ---- stress runner (§22 perf support) -------------------------------------
+
+/// `POST /admin/stress` — start a stress run against this node's own gRPC
+/// listener. Body: `{workers, duration_secs, seed_docs, mix{insert,read,
+/// update,delete,find,text,vector,hybrid}}` (all optional).
+async fn stress_start<P: PageIo>(
+    State(st): State<Arc<AppState<P>>>,
+    Json(body): Json<J>,
+) -> ApiResult<Json<J>> {
+    if let Some(h) = st.stress.lock().unwrap().as_ref()
+        && h.is_running()
+    {
+        return Err(ApiError(Error::InvalidInput(
+            "a stress run is already in progress".into(),
+        )));
+    }
+    let cfg = ndb_stress::StressConfig::from_json(&body)
+        .map_err(|e| ApiError(Error::InvalidInput(format!("stress config: {e}"))))?;
+    let target = st
+        .grpc_target
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| ApiError(Error::InvalidInput("gRPC target not configured".into())))?;
+    let h = ndb_stress::start(cfg, target);
+    let snap = h.snapshot();
+    *st.stress.lock().unwrap() = Some(h);
+    Ok(Json(snap))
+}
+
+/// `GET /admin/stress` — live status + per-op latency histograms.
+async fn stress_status<P: PageIo>(State(st): State<Arc<AppState<P>>>) -> ApiResult<Json<J>> {
+    match st.stress.lock().unwrap().as_ref() {
+        Some(h) => Ok(Json(h.snapshot())),
+        None => Ok(Json(json!({ "phase": "idle" }))),
+    }
+}
+
+/// `POST /admin/stress/stop` — request cancellation; workers drain fast
+/// (checked per op) and the phase flips to done.
+async fn stress_stop<P: PageIo>(State(st): State<Arc<AppState<P>>>) -> ApiResult<Json<J>> {
+    match st.stress.lock().unwrap().as_ref() {
+        Some(h) => {
+            h.stop();
+            Ok(Json(json!({ "stopping": true })))
+        }
+        None => Err(ApiError(Error::NotFound("no stress run".into()))),
+    }
 }

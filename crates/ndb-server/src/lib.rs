@@ -41,6 +41,9 @@ pub async fn run(config_path: &Path) -> Result<()> {
     }
     let mut state = ndb_rest::AppState::new(Arc::clone(&engine));
     state.auth = Arc::new(auth);
+    // The stress runner dials the gRPC listener on loopback.
+    *state.grpc_target.lock().unwrap() =
+        Some(format!("http://127.0.0.1:{}", config.node.grpc_port));
     *state.config.lock().unwrap() = Some(serde_yaml::to_value(serde_json::json!({
         "node": {"id": config.node.id, "listen": config.node.listen_address.to_string(),
                  "rest_port": config.node.rest_port, "grpc_port": config.node.grpc_port},

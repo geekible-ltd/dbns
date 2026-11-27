@@ -113,12 +113,15 @@ impl<P: PageIo> BTree<P> {
     /// pins it (e.g. a cursor parked on a just-unlinked leaf).
     fn free_page(&self, id: PageId) {
         if self.pool.free_page(id).is_err() {
-            self.pending_frees.lock().unwrap().push(id);
+            self.pending_frees
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) /* poison-recover */
+                .push(id);
         }
     }
 
     fn drain_pending_frees(&self) {
-        let mut pending = self.pending_frees.lock().unwrap();
+        let mut pending = self.pending_frees.lock().unwrap_or_else(|e| e.into_inner()) /* poison-recover */;
         pending.retain(|&id| self.pool.free_page(id).is_err());
     }
 
